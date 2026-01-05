@@ -8,21 +8,21 @@ import yt_dlp
 from aiohttp import web
 import pymongo
 
-# --- Configuration ---
+# --- ១. ការកំណត់ (Configuration) ---
 API_TOKEN = os.getenv('BOT_TOKEN', '8122462719:AAEPt-oIfSxCVcLz0SjXGz2cDHrPuVKOkJk')
 ADMIN_ID = 8399209514
 MONGO_URI = "mongodb+srv://admin:123@downloader.xur9mwk.mongodb.net/?appName=downloader"
 
-# --- MongoDB Connection ---
+# --- ២. ភ្ជាប់ MongoDB ---
 try:
     client = pymongo.MongoClient(MONGO_URI)
     db = client['downloader_bot']
-    users_collection = db['users'] # ប្តូរឈ្មោះ Table ទៅ users វិញព្រោះទុកទាំងអ្នក Free និង Premium
+    users_collection = db['users'] 
     print("✅ ភ្ជាប់ទៅ MongoDB ជោគជ័យ!")
 except Exception as e:
     print(f"❌ បញ្ហាភ្ជាប់ MongoDB: {e}")
 
-# --- Setup Directories ---
+# --- ៣. កំណត់កន្លែង Save (Render vs Local) ---
 DOWNLOAD_PATH = '/tmp/' if os.getenv('RENDER') else 'downloads/'
 if not os.path.exists(DOWNLOAD_PATH) and not os.getenv('RENDER'):
     os.makedirs(DOWNLOAD_PATH)
@@ -31,12 +31,11 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# --- User Management Logic ---
+# --- ៤. Logic គ្រប់គ្រង User ---
 def get_user_data(user_id):
     """ទាញយកទិន្នន័យ User ឬបង្កើតថ្មីបើមិនទាន់មាន"""
     user = users_collection.find_one({"user_id": user_id})
     if not user:
-        # បង្កើត User ថ្មីជាលក្ខណៈ Free
         new_user = {
             "user_id": user_id,
             "status": "free",
@@ -60,9 +59,9 @@ def increment_download(user_id):
         {"$inc": {"downloads_count": 1}}
     )
 
-# --- Web Server (Keep Alive) ---
+# --- ៥. Web Server (កុំឱ្យ Render បិទ) ---
 async def handle(request):
-    return web.Response(text="Bot is running with Trial System!")
+    return web.Response(text="Bot is running smoothly!")
 
 async def start_web_server():
     app = web.Application()
@@ -73,8 +72,9 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
-# --- Bot Handlers ---
+# --- ៦. Bot Handlers (មុខងារ Bot) ---
 
+# ៦.១ Start Command
 @dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
     user = get_user_data(message.from_user.id)
@@ -83,11 +83,11 @@ async def send_welcome(message: types.Message):
     
     msg = (
         "សួស្ដី! 👋\n"
-        "ខ្ញុំជា Bot ទាញយកវីដេអូ និងសំឡេង។\n\n"
+        "ខ្ញុំជា Bot ទាញយកវីដេអូ TikTok & Facebook។\n\n"
     )
     
     if status == 'premium' or message.from_user.id == ADMIN_ID:
-        msg += "🌟 ស្ថានភាព: **Premium** (ទាញយកឥតដែនកំណត់)"
+        msg += "🌟 ស្ថានភាព: **Premium** (ប្រើបានឥតដែនកំណត់)"
     else:
         left = 3 - count
         if left > 0:
@@ -95,30 +95,30 @@ async def send_welcome(message: types.Message):
         else:
             msg += "⛔️ ស្ថានភាព: **អស់ចំនួនកំណត់**\nសូមបង់ប្រាក់ដើម្បីបន្ត។"
             
-    msg += "\n\n👇 ផ្ញើ Link TikTok ឬ Facebook មកទីនេះ!"
+    msg += "\n\n👇 ផ្ញើ Link របស់អ្នកមកទីនេះ!"
     await message.reply(msg, parse_mode="Markdown")
 
-# ទទួល Link និងបង្ហាញប៊ូតុង
+# ៦.២ ទទួល Link (Text Handler)
 @dp.message_handler()
 async def check_link_and_limit(message: types.Message):
     url = message.text.strip()
     
-    # 1. ពិនិត្យ Link
+    # ពិនិត្យមើលថាជា Link ដែរឬទេ
     if not any(domain in url for domain in ["tiktok.com", "facebook.com", "fb.watch"]):
-        if message.content_type == 'text': # កុំតបបើគេផ្ញើរូប (វិក័យបត្រ)
-             await message.reply("⚠️ Link មិនត្រឹមត្រូវ។")
+        # បើមិនមែន Link ហើយមិនមែនជារូបភាព (វិក័យបត្រ)
+        if message.content_type == 'text':
+             await message.reply("⚠️ Link មិនត្រឹមត្រូវ។ សូមផ្ញើ Link TikTok ឬ Facebook។")
         return
 
     user_id = message.from_user.id
     user = get_user_data(user_id)
     
-    # 2. ពិនិត្យសិទ្ធិ (Quota Check)
-    # បើមិនមែន Admin, មិនមែន Premium, ហើយទាញយកលើសពី ឬស្មើ 3 ដង -> ទារលុយ
+    # ពិនិត្យសិទ្ធិ (Quota Check)
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 3:
         await send_payment_prompt(message)
         return
 
-    # 3. បង្ហាញប៊ូតុងជម្រើស
+    # បង្ហាញប៊ូតុងជម្រើស
     keyboard = InlineKeyboardMarkup()
     btn_video = InlineKeyboardButton("🎬 Video", callback_data="dl_video")
     btn_audio = InlineKeyboardButton("🎵 Audio", callback_data="dl_audio")
@@ -127,17 +127,17 @@ async def check_link_and_limit(message: types.Message):
     await message.reply(
         "👇 សូមជ្រើសរើសប្រភេទ៖",
         reply_markup=keyboard,
-        reply_to_message_id=message.message_id # តបទៅសារដែលមាន Link
+        reply_to_message_id=message.message_id
     )
 
-# មុខងារទារលុយ (Payment Prompt)
+# Function បង្ហាញ QR Code
 async def send_payment_prompt(message: types.Message):
     msg_text = (
         "🔒 **អស់ចំនួនសាកល្បងហើយ!** (3/3)\n\n"
         "💰 **សូមបង់ប្រាក់ 2$ ដើម្បីប្រើប្រាស់មួយជីវិត!**\n"
-        "1. ស្កេន QR Code។\n"
+        "1. ស្កេន QR Code ខាងលើ។\n"
         "2. ផ្ញើរូបវិក័យបត្រមកទីនេះ។\n"
-        "3. Admin នឹងបើកសិទ្ធិជូន។"
+        "3. Admin នឹងបើកសិទ្ធិជូនភ្លាមៗ។"
     )
     
     if os.path.exists('qrcode.jpg'):
@@ -146,19 +146,20 @@ async def send_payment_prompt(message: types.Message):
     else:
         await message.answer(msg_text + "\n(QR Code កំពុងរៀបចំ សូមទាក់ទង Admin)")
 
-# ទទួលការចុចប៊ូតុង (Callback Query)
+# ៦.៣ ទទួលការចុចប៊ូតុង (Callback Handler)
 @dp.callback_query_handler(lambda c: c.data in ['dl_video', 'dl_audio'])
 async def process_callback_button(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     message = callback_query.message
     
-    # ទាញយក Link ពីសារដើមដែលយើង Reply ទៅ
+    # ទាញយក Link ពីសារដើម
     if not message.reply_to_message or not message.reply_to_message.text:
         await bot.answer_callback_query(callback_query.id, "រក Link មិនឃើញ!")
         return
         
     url = message.reply_to_message.text.strip()
-    download_type = callback_query.data # dl_video ឬ dl_audio
+    original_msg_id = message.reply_to_message.message_id # ចងចាំ ID សាររបស់ User
+    download_type = callback_query.data
     
     # ពិនិត្យសិទ្ធិម្ដងទៀត (ការពារករណីចុចប៊ូតុងចាស់)
     user = get_user_data(user_id)
@@ -167,7 +168,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
         await send_payment_prompt(message)
         return
 
-    # លុបប៊ូតុងចោល ហើយដាក់ថា "កំពុងដំណើរការ"
+    # ប្ដូរសារទៅជា "កំពុងដំណើរការ..."
     await bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=message.message_id,
@@ -176,12 +177,11 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     
     try:
         loop = asyncio.get_event_loop()
-        # កំណត់ថាជា Video ឬ Audio
         is_audio = (download_type == 'dl_audio')
         filename = await loop.run_in_executor(None, download_logic, url, is_audio)
         
         if filename:
-            # ផ្ញើឯកសារ
+            # ផ្ញើឯកសារទៅ User
             with open(filename, 'rb') as file:
                 if is_audio:
                     await bot.send_audio(message.chat.id, file, caption="✅ Audio Downloaded")
@@ -192,18 +192,27 @@ async def process_callback_button(callback_query: types.CallbackQuery):
             if user_id != ADMIN_ID and user.get("status") != "premium":
                 increment_download(user_id)
             
-            # លុប file ចោល
+            # លុប file ចោលពី Server
             if os.path.exists(filename): os.remove(filename)
-            await bot.delete_message(message.chat.id, message.message_id) # លុបសារ "កំពុងដំណើរការ"
+            
+            # --- Auto Delete (លុបសារ) ---
+            # 1. លុបសារ "កំពុងដំណើរការ"
+            await bot.delete_message(message.chat.id, message.message_id)
+            
+            # 2. លុបសារ Link របស់ User ចេញ
+            try:
+                await bot.delete_message(message.chat.id, original_msg_id)
+            except Exception:
+                pass # បើលុបមិនបាន (User លុបមុន) ក៏អត់ទៅ
+                
         else:
-             await bot.edit_message_text("❌ ទាញយកមិនបាន។", chat_id=message.chat.id, message_id=message.message_id)
+             await bot.edit_message_text("❌ ទាញយកមិនបាន។ Link អាចខូច។", chat_id=message.chat.id, message_id=message.message_id)
              
     except Exception as e:
         await bot.edit_message_text(f"Error: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
 
-# Logic ទាញយក (កែសម្រួលដើម្បីគាំទ្រ Audio)
+# ៦.៤ Logic ទាញយក (yt-dlp)
 def download_logic(url, audio_only=False):
-    # Option សម្រាប់ Video
     opts = {
         'format': 'best',
         'outtmpl': f'{DOWNLOAD_PATH}%(id)s.%(ext)s',
@@ -212,9 +221,9 @@ def download_logic(url, audio_only=False):
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     }
     
-    # Option សម្រាប់ Audio
     if audio_only:
-        opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best' # យក m4a ព្រោះមិនបាច់ប្រើ ffmpeg convert (Render Free មិនមាន ffmpeg)
+        # យក m4a ដើម្បីកុំឱ្យត្រូវការ ffmpeg
+        opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best' 
     
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -222,7 +231,7 @@ def download_logic(url, audio_only=False):
             return ydl.prepare_filename(info)
     except: return None
 
-# --- Payment Approval Logic ---
+# ៦.៥ ទទួលវិក័យបត្រ (Photo Handler)
 @dp.message_handler(content_types=['photo'])
 async def handle_receipt(message: types.Message):
     user_id = message.from_user.id
@@ -235,19 +244,21 @@ async def handle_receipt(message: types.Message):
     caption = f"📩 **វិក័យបត្រថ្មី!**\nUser: {message.from_user.full_name}\nID: `{user_id}`\n\nApprove: `/approve {user_id}`"
     await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
 
+# ៦.៦ Admin Approve Command
 @dp.message_handler(commands=['approve'])
 async def admin_approve(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     try:
         target_id = int(message.get_args())
-        upgrade_to_premium(target_id) # Update ទៅ Premium
+        upgrade_to_premium(target_id)
         await message.reply(f"✅ User {target_id} ឥឡូវជា Premium!")
-        await bot.send_message(target_id, "🎉 **ជោគជ័យ!** អ្នកជាសមាជិក Premium ហើយ។")
+        await bot.send_message(target_id, "🎉 **ជោគជ័យ!** ការបង់ប្រាក់ត្រូវបានទទួលស្គាល់។ អ្នកអាចប្រើប្រាស់បានឥតដែនកំណត់។")
     except: pass
 
+# --- ៧. ចាប់ផ្តើមដំណើរការ ---
 async def on_startup(_):
     await start_web_server()
-    print("🤖 Bot with Free Trial & Audio started!")
+    print("🤖 Bot is running with Full Features!")
 
 if __name__ == '__main__':
     executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
