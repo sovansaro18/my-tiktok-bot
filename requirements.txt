@@ -1,0 +1,5 @@
+aiogram==2.25.1
+yt-dlp
+aiohttp
+pymongo
+dnspython
