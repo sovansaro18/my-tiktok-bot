@@ -78,14 +78,14 @@ async def send_welcome(message: types.Message):
     # ឆែកមើលក្នុង MongoDB ឬមើលថាជា Admin
     if is_user_paid(user_id) or user_id == ADMIN_ID:
         await message.reply(
-            "✅ **ស្វាគមន៍ Premium User!**\n"
-            "ឈ្មោះរបស់អ្នកមានក្នុងបញ្ជី Database ហើយ។\n\n"
-            "👇 ផ្ញើ Link មកដើម្បីទាញយកបានភ្លាមៗ!",
+            "✅ **ស្វាគមន៍ការត្រលប់មកវិញ!**\n"
+            "ឈ្មោះរបស់អ្នកមានក្នុងបញ្ជីរួចហើយ។\n\n"
+            "👇 ផ្ញើ Link Video មកទីនេះដើម្បីទាញយកបានភ្លាមៗ!",
             parse_mode="Markdown"
         )
     else:
         # បើមិនទាន់បង់លុយ
-        await message.reply("🔒 **សេវាកម្មនេះតម្រូវឱ្យបង់ប្រាក់**")
+        await message.reply("🔒 **សេវាកម្មនេះតម្រូវឱ្យបង់ប្រាក់ 2$ ដើម្បីប្រើប្រាស់បានឥតដែនកំណត់**")
         
         if os.path.exists('qrcode.jpg'):
             with open('qrcode.jpg', 'rb') as photo:
@@ -95,7 +95,7 @@ async def send_welcome(message: types.Message):
                         "💰 **សូមបង់ប្រាក់ 2$ ដើម្បីប្រើប្រាស់មួយជីវិត!**\n\n"
                         "1. ស្កេន QR Code ខាងលើ។\n"
                         "2. ផ្ញើរូបវិក័យបត្រមកទីនេះ។\n"
-                        "3. Admin នឹងបញ្ចូលឈ្មោះអ្នកទៅក្នុង Cloud Database។"
+                        "3. Admin នឹងបញ្ចូលឈ្មោះអ្នកទៅក្នុងបញ្ជី។"
                     )
                 )
         else:
@@ -133,7 +133,7 @@ async def admin_approve(message: types.Message):
         # ហៅ Function បញ្ចូលទៅ MongoDB
         if add_paid_user(target_user_id):
             await message.reply(f"✅ បានរក្សាទុក User {target_user_id} ចូល Database ជោគជ័យ!")
-            await bot.send_message(target_user_id, "🎉 **ការបង់ប្រាក់ជោគជ័យ!** អ្នកអាចប្រើប្រាស់បានហើយ។")
+            await bot.send_message(target_user_id, "🎉 **ការបង់ប្រាក់ជោគជ័យ!** អ្នកអាចប្រើប្រាស់បានដោយសេរី។")
         else:
             await message.reply(f"⚠️ User {target_user_id} មានក្នុង Database រួចហើយ។")
             
@@ -186,4 +186,5 @@ async def on_startup(_):
     print("🤖 MongoDB Bot Started!")
 
 if __name__ == '__main__':
+
     executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
