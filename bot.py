@@ -85,7 +85,7 @@ async def send_welcome(message: types.Message):
         )
     else:
         # បើមិនទាន់បង់លុយ
-        await message.reply("🔒 **សេវាកម្មនេះតម្រូវឱ្យបង់ប្រាក់ 2$ ដើម្បីប្រើប្រាស់បានឥតដែនកំណត់**")
+        await message.reply("🔒 **សេវាកម្មនេះតម្រូវឱ្យបង់ប្រាក់ 2$ ដើម្បីប្រើប្រាស់បានរហូត**")
         
         if os.path.exists('qrcode.jpg'):
             with open('qrcode.jpg', 'rb') as photo:
