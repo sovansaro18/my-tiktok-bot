@@ -22,7 +22,7 @@ try:
 except Exception as e:
     print(f"❌ បញ្ហាភ្ជាប់ MongoDB: {e}")
 
-# --- ៣. កំណត់កន្លែង Save (Render vs Local) ---
+# --- ៣. កំណត់កន្លែង Save ---
 DOWNLOAD_PATH = '/tmp/' if os.getenv('RENDER') else 'downloads/'
 if not os.path.exists(DOWNLOAD_PATH) and not os.getenv('RENDER'):
     os.makedirs(DOWNLOAD_PATH)
@@ -59,7 +59,7 @@ def increment_download(user_id):
         {"$inc": {"downloads_count": 1}}
     )
 
-# --- ៥. Web Server (កុំឱ្យ Render បិទ) ---
+# --- ៥. Web Server ---
 async def handle(request):
     return web.Response(text="Bot is running smoothly!")
 
@@ -72,7 +72,7 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
-# --- ៦. Bot Handlers (មុខងារ Bot) ---
+# --- ៦. Bot Handlers ---
 
 # ៦.១ Start Command
 @dp.message_handler(commands=['start'])
@@ -105,7 +105,6 @@ async def check_link_and_limit(message: types.Message):
     
     # ពិនិត្យមើលថាជា Link ដែរឬទេ
     if not any(domain in url for domain in ["tiktok.com", "facebook.com", "fb.watch"]):
-        # បើមិនមែន Link ហើយមិនមែនជារូបភាព (វិក័យបត្រ)
         if message.content_type == 'text':
              await message.reply("⚠️ Link មិនត្រឹមត្រូវ។ សូមផ្ញើ Link TikTok ឬ Facebook។")
         return
@@ -124,10 +123,10 @@ async def check_link_and_limit(message: types.Message):
     btn_audio = InlineKeyboardButton("🎵 Audio", callback_data="dl_audio")
     keyboard.add(btn_video, btn_audio)
     
+    # [FIXED] លុប reply_to_message_id ចេញ ព្រោះ message.reply ធ្វើការងារនេះរួចហើយ
     await message.reply(
         "👇 សូមជ្រើសរើសប្រភេទ៖",
-        reply_markup=keyboard,
-        reply_to_message_id=message.message_id
+        reply_markup=keyboard
     )
 
 # Function បង្ហាញ QR Code
@@ -161,7 +160,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     original_msg_id = message.reply_to_message.message_id # ចងចាំ ID សាររបស់ User
     download_type = callback_query.data
     
-    # ពិនិត្យសិទ្ធិម្ដងទៀត (ការពារករណីចុចប៊ូតុងចាស់)
+    # ពិនិត្យសិទ្ធិម្ដងទៀត
     user = get_user_data(user_id)
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 3:
         await bot.answer_callback_query(callback_query.id, "អស់ចំនួនកំណត់ហើយ!", show_alert=True)
@@ -195,7 +194,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
             # លុប file ចោលពី Server
             if os.path.exists(filename): os.remove(filename)
             
-            # --- Auto Delete (លុបសារ) ---
+            # --- Auto Delete ---
             # 1. លុបសារ "កំពុងដំណើរការ"
             await bot.delete_message(message.chat.id, message.message_id)
             
@@ -203,7 +202,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
             try:
                 await bot.delete_message(message.chat.id, original_msg_id)
             except Exception:
-                pass # បើលុបមិនបាន (User លុបមុន) ក៏អត់ទៅ
+                pass 
                 
         else:
              await bot.edit_message_text("❌ ទាញយកមិនបាន។ Link អាចខូច។", chat_id=message.chat.id, message_id=message.message_id)
@@ -222,7 +221,6 @@ def download_logic(url, audio_only=False):
     }
     
     if audio_only:
-        # យក m4a ដើម្បីកុំឱ្យត្រូវការ ffmpeg
         opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best' 
     
     try:
@@ -231,7 +229,7 @@ def download_logic(url, audio_only=False):
             return ydl.prepare_filename(info)
     except: return None
 
-# ៦.៥ ទទួលវិក័យបត្រ (Photo Handler)
+# ៦.៥ ទទួលវិក័យបត្រ
 @dp.message_handler(content_types=['photo'])
 async def handle_receipt(message: types.Message):
     user_id = message.from_user.id
@@ -258,7 +256,7 @@ async def admin_approve(message: types.Message):
 # --- ៧. ចាប់ផ្តើមដំណើរការ ---
 async def on_startup(_):
     await start_web_server()
-    print("🤖 Bot is running with Full Features!")
+    print("🤖 Bot Started!")
 
 if __name__ == '__main__':
     executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
