@@ -33,6 +33,7 @@ dp = Dispatcher(bot)
 
 # --- ៤. Logic គ្រប់គ្រង User ---
 def get_user_data(user_id):
+    """ទាញយកទិន្នន័យ User ឬបង្កើតថ្មីបើមិនទាន់មាន"""
     user = users_collection.find_one({"user_id": user_id})
     if not user:
         new_user = {
@@ -45,18 +46,20 @@ def get_user_data(user_id):
     return user
 
 def upgrade_to_premium(user_id):
+    """ដំឡើងទៅជា Premium"""
     users_collection.update_one(
         {"user_id": user_id},
         {"$set": {"status": "premium"}}
     )
 
 def increment_download(user_id):
+    """រាប់ចំនួនដងនៃការទាញយក"""
     users_collection.update_one(
         {"user_id": user_id},
         {"$inc": {"downloads_count": 1}}
     )
 
-# --- ៥. Web Server ---
+# --- ៥. Web Server (Keep Alive) ---
 async def handle(request):
     return web.Response(text="Bot is running smoothly!")
 
@@ -69,7 +72,7 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
-# --- ៦. Bot Handlers (តម្រៀបលំដាប់ថ្មី) ---
+# --- ៦. Bot Handlers ---
 
 # ៦.១ Start Command
 @dp.message_handler(commands=['start'])
@@ -79,12 +82,14 @@ async def send_welcome(message: types.Message):
     count = user.get("downloads_count", 0)
     
     msg = (
-        "សួស្ដី! 👋\n"
-        "ខ្ញុំជា Bot ទាញយកវីដេអូ TikTok & Facebook។\n\n"
+        f"👋 **សួស្ដី {message.from_user.first_name}!**\n\n"
+        "📥 **All-in-One Downloader**\n"
+        "ទាញយកវីដេអូ TikTok & Facebook ដោយគ្មាន Watermark។\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
     )
     
     if status == 'premium' or message.from_user.id == ADMIN_ID:
-        msg += "🌟 ស្ថានភាព: **Premium** (ប្រើបានឥតដែនកំណត់)"
+        msg += "🌟 ស្ថានភាព: **Premium** (ប្រើបានឥតដែនកំណត់) ✅"
     else:
         left = 3 - count
         if left > 0:
@@ -92,10 +97,10 @@ async def send_welcome(message: types.Message):
         else:
             msg += "⛔️ ស្ថានភាព: **អស់ចំនួនកំណត់**\nសូមបង់ប្រាក់ដើម្បីបន្ត។"
             
-    msg += "\n\n👇 ផ្ញើ Link របស់អ្នកមកទីនេះ!"
+    msg += "\n\n👇 **ផ្ញើ Link របស់អ្នកមកទីនេះដើម្បីទាញយក!**"
     await message.reply(msg, parse_mode="Markdown")
 
-# ៦.២ Admin Approve Command (លើកមកដាក់ខាងលើគេ មុន Text Handler) ⭐️
+# ៦.២ Admin Approve Command (ដាក់ខាងលើ Link Handler) ⭐️
 @dp.message_handler(commands=['approve'])
 async def admin_approve(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -103,10 +108,10 @@ async def admin_approve(message: types.Message):
         target_id = int(message.get_args())
         upgrade_to_premium(target_id)
         await message.reply(f"✅ User {target_id} ឥឡូវជា Premium!")
-        await bot.send_message(target_id, "🎉 **ជោគជ័យ!** ការបង់ប្រាក់ត្រូវបានទទួលស្គាល់។ អ្នកអាចប្រើប្រាស់បានឥតដែនកំណត់។")
+        await bot.send_message(target_id, "🎉 **សូមអបអរសាទរ!**\nគណនីរបស់អ្នកត្រូវបានដំឡើងជា Premium ហើយ។\nអ្នកអាចទាញយកបានដោយសេរី! 🚀")
     except: pass
 
-# ៦.៣ ទទួលវិក័យបត្រ
+# ៦.៣ ទទួលវិក័យបត្រ (រូបភាព)
 @dp.message_handler(content_types=['photo'])
 async def handle_receipt(message: types.Message):
     user_id = message.from_user.id
@@ -115,16 +120,17 @@ async def handle_receipt(message: types.Message):
     if user.get("status") == "premium":
         return
 
-    await message.reply("⏳ បានទទួលរូប! Admin កំពុងត្រួតពិនិត្យ...")
+    await message.reply("⏳ **បានទទួលរូប!** Admin កំពុងត្រួតពិនិត្យ...")
     caption = f"📩 **វិក័យបត្រថ្មី!**\nUser: {message.from_user.full_name}\nID: `{user_id}`\n\nApprove: `/approve {user_id}`"
     await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
 
-# ៦.៤ Function បង្ហាញ QR Code
+# Function បង្ហាញ QR Code
 async def send_payment_prompt(message: types.Message):
     msg_text = (
         "🔒 **អស់ចំនួនសាកល្បងហើយ!** (3/3)\n\n"
-        "💰 **សូមបង់ប្រាក់ 2$ ដើម្បីប្រើប្រាស់មួយជីវិត!**\n"
-        "1. ស្កេន QR Code ខាងលើ។\n"
+        "💰 **តម្លៃសេវា: 2$ (មួយជីវិត)**\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "1. ស្កេន QR Code ខាងលើដើម្បីបង់ប្រាក់។\n"
         "2. ផ្ញើរូបវិក័យបត្រមកទីនេះ។\n"
         "3. Admin នឹងបើកសិទ្ធិជូនភ្លាមៗ។"
     )
@@ -135,30 +141,34 @@ async def send_payment_prompt(message: types.Message):
     else:
         await message.answer(msg_text + "\n(QR Code កំពុងរៀបចំ សូមទាក់ទង Admin)")
 
-# ៦.៥ ទទួលការចុចប៊ូតុង (Callback Handler)
+# ៦.៤ ទទួលការចុចប៊ូតុង (Callback Handler)
 @dp.callback_query_handler(lambda c: c.data in ['dl_video', 'dl_audio'])
 async def process_callback_button(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     message = callback_query.message
     
+    # ទាញយក Link ពីសារដើម
     if not message.reply_to_message or not message.reply_to_message.text:
         await bot.answer_callback_query(callback_query.id, "រក Link មិនឃើញ!")
         return
         
     url = message.reply_to_message.text.strip()
-    original_msg_id = message.reply_to_message.message_id
+    original_msg_id = message.reply_to_message.message_id # ចងចាំ ID សាររបស់ User
     download_type = callback_query.data
     
+    # ពិនិត្យសិទ្ធិម្ដងទៀត
     user = get_user_data(user_id)
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 3:
         await bot.answer_callback_query(callback_query.id, "អស់ចំនួនកំណត់ហើយ!", show_alert=True)
         await send_payment_prompt(message)
         return
 
+    # ប្ដូរសារទៅជា "កំពុងដំណើរការ..."
     await bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=message.message_id,
-        text="⏳ កំពុងដំណើរការ... សូមរង់ចាំ!"
+        text="⏳ **កំពុងដំណើរការ... សូមរង់ចាំ!**",
+        parse_mode="Markdown"
     )
     
     try:
@@ -167,27 +177,37 @@ async def process_callback_button(callback_query: types.CallbackQuery):
         filename = await loop.run_in_executor(None, download_logic, url, is_audio)
         
         if filename:
+            # ផ្ញើឯកសារទៅ User
             with open(filename, 'rb') as file:
                 if is_audio:
-                    await bot.send_audio(message.chat.id, file, caption="✅ Audio Downloaded")
+                    await bot.send_audio(message.chat.id, file, caption="✅ **Audio Downloaded**", parse_mode="Markdown")
                 else:
-                    await bot.send_video(message.chat.id, file, caption="✅ Video Downloaded")
+                    await bot.send_video(message.chat.id, file, caption="✅ **Video Downloaded**", parse_mode="Markdown")
             
+            # រាប់ចំនួនបន្ថែម (បើមិនមែន Admin/Premium)
             if user_id != ADMIN_ID and user.get("status") != "premium":
                 increment_download(user_id)
             
+            # លុប file ចោលពី Server
             if os.path.exists(filename): os.remove(filename)
+            
+            # --- Auto Delete (សម្អាតសារ) ---
+            # 1. លុបសារ "កំពុងដំណើរការ"
             await bot.delete_message(message.chat.id, message.message_id)
+            
+            # 2. លុបសារ Link របស់ User ចេញ
             try:
                 await bot.delete_message(message.chat.id, original_msg_id)
-            except Exception: pass
+            except Exception:
+                pass 
+                
         else:
-             await bot.edit_message_text("❌ ទាញយកមិនបាន។ Link អាចខូច។", chat_id=message.chat.id, message_id=message.message_id)
+             await bot.edit_message_text("❌ ទាញយកមិនបាន។ Link អាចខូច ឬ Private។", chat_id=message.chat.id, message_id=message.message_id)
              
     except Exception as e:
         await bot.edit_message_text(f"Error: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
 
-# ៦.៦ Logic ទាញយក (yt-dlp)
+# ៦.៥ Logic ទាញយក (yt-dlp)
 def download_logic(url, audio_only=False):
     opts = {
         'format': 'best',
@@ -196,15 +216,17 @@ def download_logic(url, audio_only=False):
         'noplaylist': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     }
+    
     if audio_only:
         opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best' 
+    
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             return ydl.prepare_filename(info)
     except: return None
 
-# ៦.៧ ទទួល Link (Text Handler) - ដាក់នៅក្រោមគេបង្អស់! ⚠️
+# ៦.៦ ទទួល Link (Text Handler) - ដាក់ក្រោមគេបង្អស់ ✅
 @dp.message_handler()
 async def check_link_and_limit(message: types.Message):
     url = message.text.strip()
@@ -212,27 +234,34 @@ async def check_link_and_limit(message: types.Message):
     # ពិនិត្យមើលថាជា Link ដែរឬទេ
     if not any(domain in url for domain in ["tiktok.com", "facebook.com", "fb.watch"]):
         if message.content_type == 'text':
-             await message.reply("⚠️ Link មិនត្រឹមត្រូវ។ សូមផ្ញើ Link TikTok ឬ Facebook។")
+             await message.reply("⚠️ **Link មិនត្រឹមត្រូវ!**\nសូមផ្ញើ Link TikTok ឬ Facebook។", parse_mode="Markdown")
         return
 
     user_id = message.from_user.id
     user = get_user_data(user_id)
     
+    # ពិនិត្យសិទ្ធិ (Quota Check)
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 3:
         await send_payment_prompt(message)
         return
 
+    # បង្ហាញប៊ូតុងជម្រើស
     keyboard = InlineKeyboardMarkup()
     btn_video = InlineKeyboardButton("🎬 Video", callback_data="dl_video")
     btn_audio = InlineKeyboardButton("🎵 Audio", callback_data="dl_audio")
     keyboard.add(btn_video, btn_audio)
     
-    await message.reply("👇 សូមជ្រើសរើសប្រភេទ៖", reply_markup=keyboard)
+    # ប្រើ reply ធម្មតា (លុប reply_to_message_id ចេញហើយ)
+    await message.reply(
+        "👇 **សូមជ្រើសរើសប្រភេទ៖**",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
 
 # --- ៧. ចាប់ផ្តើមដំណើរការ ---
 async def on_startup(_):
     await start_web_server()
-    print("🤖 Bot Started!")
+    print("🤖 Bot Started Successfully!")
 
 if __name__ == '__main__':
     executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
