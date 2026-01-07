@@ -8,10 +8,12 @@ import yt_dlp
 from aiohttp import web
 import pymongo
 
+# --- ១. ការកំណត់ (Configuration) ---
 API_TOKEN = os.getenv('BOT_TOKEN', '8122462719:AAEPt-oIfSxCVcLz0SjXGz2cDHrPuVKOkJk')
 ADMIN_ID = 8399209514
 MONGO_URI = "mongodb+srv://admin:123@downloader.xur9mwk.mongodb.net/?appName=downloader"
 
+# --- ២. ភ្ជាប់ MongoDB ---
 try:
     client = pymongo.MongoClient(MONGO_URI)
     db = client['downloader_bot']
@@ -20,6 +22,7 @@ try:
 except Exception as e:
     print(f"❌ បញ្ហាភ្ជាប់ MongoDB: {e}")
 
+# --- ៣. កំណត់កន្លែង Save ---
 DOWNLOAD_PATH = '/tmp/' if os.getenv('RENDER') else 'downloads/'
 if not os.path.exists(DOWNLOAD_PATH) and not os.getenv('RENDER'):
     os.makedirs(DOWNLOAD_PATH)
@@ -28,6 +31,7 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
+# --- ៤. Logic គ្រប់គ្រង User ---
 def get_user_data(user_id):
     user = users_collection.find_one({"user_id": user_id})
     if not user:
@@ -52,6 +56,7 @@ def increment_download(user_id):
         {"$inc": {"downloads_count": 1}}
     )
 
+# --- ៥. Web Server (Keep Alive) ---
 async def handle(request):
     return web.Response(text="Bot is running smoothly!")
 
@@ -64,6 +69,8 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
+
+# --- ៦. Bot Handlers ---
 
 @dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
@@ -81,9 +88,10 @@ async def send_welcome(message: types.Message):
     if status == 'premium' or message.from_user.id == ADMIN_ID:
         msg += "🌟 ស្ថានភាព: **Premium** (ប្រើបានឥតដែនកំណត់) ✅"
     else:
-        left = 3 - count
+        # [កែប្រែ] ប្តូរពី 3 ទៅ 10
+        left = 10 - count
         if left > 0:
-            msg += f"👤 ស្ថានភាព: **Free Trial**\n📉 អ្នកនៅសល់: **{left}/3** ដង។"
+            msg += f"👤 ស្ថានភាព: **Free Trial**\n📉 អ្នកនៅសល់: **{left}/10** ដង។"
         else:
             msg += "⛔️ ស្ថានភាព: **អស់ចំនួនកំណត់**\nសូមបង់ប្រាក់ដើម្បីបន្ត។"
             
@@ -122,8 +130,9 @@ async def handle_receipt(message: types.Message):
     await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
 
 async def send_payment_prompt(message: types.Message):
+    # [កែប្រែ] ប្តូរអក្សរពី 3/3 ទៅ 10/10
     msg_text = (
-        "🔒 **អស់ចំនួនសាកល្បងហើយ!** (3/3)\n\n"
+        "🔒 **អស់ចំនួនសាកល្បងហើយ!** (10/10)\n\n"
         "💰 **តម្លៃសេវា: 2$ (មួយជីវិត)**\n"
         "➖➖➖➖➖➖➖➖➖➖\n"
         "1. ស្កេន QR Code ខាងលើដើម្បីបង់ប្រាក់។\n"
@@ -152,7 +161,8 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     download_type = callback_query.data
     
     user = get_user_data(user_id)
-    if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 3:
+    # [កែប្រែ] លក្ខខណ្ឌពិនិត្យមើលថាលើសពី 10 ឬនៅ
+    if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 10:
         await bot.answer_callback_query(callback_query.id, "អស់ចំនួនកំណត់ហើយ!", show_alert=True)
         await send_payment_prompt(message)
         return
@@ -225,7 +235,8 @@ async def check_link_and_limit(message: types.Message):
     user_id = message.from_user.id
     user = get_user_data(user_id)
     
-    if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 3:
+    # [កែប្រែ] លក្ខខណ្ឌពិនិត្យមើលថាលើសពី 10 ឬនៅ
+    if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 10:
         await send_payment_prompt(message)
         return
 
