@@ -78,10 +78,11 @@ async def send_welcome(message: types.Message):
     status = user.get("status", "free")
     count = user.get("downloads_count", 0)
     
+    # [Clean] លុប Pinterest ចេញពីសារ
     msg = (
         f"👋 **សួស្ដី {message.from_user.first_name}!**\n\n"
         "📥 **All-in-One Downloader**\n"
-        "ទាញយកវីដេអូពី TikTok, Facebook & Pinterest។\n"
+        "ទាញយកវីដេអូ TikTok & Facebook ដោយគ្មាន Watermark។\n"
         "➖➖➖➖➖➖➖➖➖➖\n"
     )
     
@@ -102,8 +103,8 @@ async def send_welcome(message: types.Message):
 async def send_help(message: types.Message):
     msg = (
         "❓ **របៀបប្រើប្រាស់ Bot:**\n\n"
-        "1️⃣ ចូលទៅកាន់ TikTok, FB ឬ Pinterest។\n"
-        "2️⃣ Copy Link វីដេអូ។\n"
+        "1️⃣ ចូលទៅកាន់ TikTok ឬ Facebook។\n"
+        "2️⃣ Copy Link វីដេអូដែលអ្នកចង់បាន។\n"
         "3️⃣ យកមក Paste ក្នុង Bot នេះ។\n"
         "4️⃣ ជ្រើសរើស **Video** ឬ **Audio** ជាការស្រេច!\n\n"
         "💡 *បញ្ជាក់: Bot អាចទាញយកបានទាំង TikTok (No Watermark) និង Facebook HD។*"
@@ -209,6 +210,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     download_type = callback_query.data
     
     user = get_user_data(user_id)
+    # Check limit 10
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 10:
         await bot.answer_callback_query(callback_query.id, "អស់ចំនួនកំណត់ហើយ!", show_alert=True)
         await send_payment_prompt(message)
@@ -256,17 +258,16 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     except Exception as e:
         await bot.edit_message_text(f"Error: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
 
-# ៦.៨ Logic ទាញយក (yt-dlp) [កែប្រែ User-Agent]
+# ៦.៨ Logic ទាញយក (yt-dlp)
 def download_logic(url, audio_only=False):
-    # កំណត់ User-Agent ដូចទូរស័ព្ទ Android (ដើម្បីបន្លំ Pinterest)
+    # [Clean] ប្រើ User-Agent ធម្មតាវិញ (ដែលដើរស្រួលជាមួយ TikTok/FB)
     opts = {
         'format': 'best',
         'outtmpl': f'{DOWNLOAD_PATH}%(id)s.%(ext)s',
         'quiet': True,
         'noplaylist': True,
         'socket_timeout': 15,
-        'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-        'referer': 'https://www.pinterest.com/', # បន្ថែម Referer
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     }
     
     if audio_only:
@@ -285,11 +286,12 @@ def download_logic(url, audio_only=False):
 async def check_link_and_limit(message: types.Message):
     url = message.text.strip()
     
-    allowed_domains = ["tiktok.com", "facebook.com", "fb.watch", "pinterest.com", "pin.it"]
+    # [Clean] ទុកតែ TikTok និង Facebook
+    allowed_domains = ["tiktok.com", "facebook.com", "fb.watch"]
     
     if not any(domain in url for domain in allowed_domains):
         if message.content_type == 'text':
-             await message.reply("⚠️ **Link មិនត្រឹមត្រូវ!**\nសូមផ្ញើ Link TikTok, Facebook ឬ Pinterest។", parse_mode="Markdown")
+             await message.reply("⚠️ **Link មិនត្រឹមត្រូវ!**\nសូមផ្ញើ Link TikTok ឬ Facebook។", parse_mode="Markdown")
         return
 
     user_id = message.from_user.id
