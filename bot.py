@@ -69,9 +69,9 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
-
 # --- ៦. Bot Handlers ---
 
+# ៦.១ Start Command
 @dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
     user = get_user_data(message.from_user.id)
@@ -81,14 +81,13 @@ async def send_welcome(message: types.Message):
     msg = (
         f"👋 **សួស្ដី {message.from_user.first_name}!**\n\n"
         "📥 **All-in-One Downloader**\n"
-        "ទាញយកវីដេអូ TikTok & Facebook ដោយគ្មាន Watermark។\n"
+        "ទាញយកវីដេអូពី TikTok, Facebook & Pinterest។\n"
         "➖➖➖➖➖➖➖➖➖➖\n"
     )
     
     if status == 'premium' or message.from_user.id == ADMIN_ID:
         msg += "🌟 ស្ថានភាព: **Premium** (ប្រើបានឥតដែនកំណត់) ✅"
     else:
-        # [កែប្រែ] ប្តូរពី 3 ទៅ 10
         left = 10 - count
         if left > 0:
             msg += f"👤 ស្ថានភាព: **Free Trial**\n📉 អ្នកនៅសល់: **{left}/10** ដង។"
@@ -98,6 +97,53 @@ async def send_welcome(message: types.Message):
     msg += "\n\n👇 **ផ្ញើ Link របស់អ្នកមកទីនេះដើម្បីទាញយក!**"
     await message.reply(msg, parse_mode="Markdown")
 
+# ៦.២ Help Command
+@dp.message_handler(commands=['help'])
+async def send_help(message: types.Message):
+    msg = (
+        "❓ **របៀបប្រើប្រាស់ Bot:**\n\n"
+        "1️⃣ ចូលទៅកាន់ TikTok, FB ឬ Pinterest។\n"
+        "2️⃣ Copy Link វីដេអូ។\n"
+        "3️⃣ យកមក Paste ក្នុង Bot នេះ។\n"
+        "4️⃣ ជ្រើសរើស **Video** ឬ **Audio** ជាការស្រេច!\n\n"
+        "💡 *គាំទ្រ: tiktok.com, facebook.com, pinterest.com*"
+    )
+    await message.reply(msg, parse_mode="Markdown")
+
+# ៦.៣ Plan Command
+@dp.message_handler(commands=['plan'])
+async def send_plan(message: types.Message):
+    user = get_user_data(message.from_user.id)
+    status = user.get("status", "free")
+    count = user.get("downloads_count", 0)
+    
+    msg = "📊 **ព័ត៌មានគណនីរបស់អ្នក:**\n\n"
+    msg += f"🆔 ID: `{message.from_user.id}`\n"
+    
+    if status == 'premium' or message.from_user.id == ADMIN_ID:
+        msg += "🌟 គម្រោង: **Premium (Lifetime)**\n✅ អ្នកអាចទាញយកបានដោយសេរី!"
+    else:
+        msg += "👤 គម្រោង: **Free Trial**\n"
+        msg += f"📉 បានប្រើ: **{count}/10** ដង\n"
+        if count >= 10:
+             msg += "⛔️ **អស់ចំនួនកំណត់ហើយ!**"
+        else:
+             msg += f"✨ នៅសល់: **{10 - count}** ដងទៀត។"
+             
+    await message.reply(msg, parse_mode="Markdown")
+
+# ៦.៤ Support Command
+@dp.message_handler(commands=['support'])
+async def send_support(message: types.Message):
+    msg = (
+        "☎️ **ទាក់ទងជំនួយ (Support):**\n\n"
+        "ប្រសិនបើ Bot មានបញ្ហា ឬចង់បង់ប្រាក់៖\n"
+        "👉 សូមទាក់ទង Admin: @Sovansaro\n\n"
+        "⏰ ម៉ោងធ្វើការ: 8:00 AM - 8:00 PM"
+    )
+    await message.reply(msg, parse_mode="Markdown")
+
+# ៦.៥ Admin Approve Command
 @dp.message_handler(commands=['approve'])
 async def admin_approve(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -117,6 +163,7 @@ async def admin_approve(message: types.Message):
     except Exception as e:
         await message.reply(f"⚠️ Error: {e}")
 
+# ៦.៦ ទទួលវិក័យបត្រ
 @dp.message_handler(content_types=['photo'])
 async def handle_receipt(message: types.Message):
     user_id = message.from_user.id
@@ -129,8 +176,8 @@ async def handle_receipt(message: types.Message):
     caption = f"📩 **វិក័យបត្រថ្មី!**\nUser: {message.from_user.full_name}\nID: `{user_id}`\n\nApprove: `/approve {user_id}`"
     await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
 
+# Function បង្ហាញ QR Code
 async def send_payment_prompt(message: types.Message):
-    # [កែប្រែ] ប្តូរអក្សរពី 3/3 ទៅ 10/10
     msg_text = (
         "🔒 **អស់ចំនួនសាកល្បងហើយ!** (10/10)\n\n"
         "💰 **តម្លៃសេវា: 2$ (មួយជីវិត)**\n"
@@ -146,6 +193,7 @@ async def send_payment_prompt(message: types.Message):
     else:
         await message.answer(msg_text + "\n(QR Code កំពុងរៀបចំ សូមទាក់ទង Admin)")
 
+# ៦.៧ ទទួលការចុចប៊ូតុង (Callback Handler)
 @dp.callback_query_handler(lambda c: c.data in ['dl_video', 'dl_audio'])
 async def process_callback_button(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -153,7 +201,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     
     if not message.reply_to_message or not message.reply_to_message.text:
         await bot.answer_callback_query(callback_query.id, "រក Link មិនឃើញ (សារដើមត្រូវបានលុប)!")
-        await bot.delete_message(message.chat.id, message.message_id) 
+        await bot.delete_message(message.chat.id, message.message_id)
         return
         
     url = message.reply_to_message.text.strip()
@@ -161,7 +209,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     download_type = callback_query.data
     
     user = get_user_data(user_id)
-    # [កែប្រែ] លក្ខខណ្ឌពិនិត្យមើលថាលើសពី 10 ឬនៅ
+    # Check limit 10
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 10:
         await bot.answer_callback_query(callback_query.id, "អស់ចំនួនកំណត់ហើយ!", show_alert=True)
         await send_payment_prompt(message)
@@ -170,7 +218,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     await bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=message.message_id,
-        text="⏳ **កំពុងដំណើរការ... សូមរង់ចាំ!**",
+        text="⬇️ **កំពុងទាញយកពី Server...**\n(សូមរង់ចាំបន្តិច...)",
         parse_mode="Markdown"
     )
     
@@ -180,6 +228,13 @@ async def process_callback_button(callback_query: types.CallbackQuery):
         filename = await loop.run_in_executor(None, download_logic, url, is_audio)
         
         if filename:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                text="⬆️ **កំពុង Upload ផ្ញើជូនអ្នក...**",
+                parse_mode="Markdown"
+            )
+
             with open(filename, 'rb') as file:
                 if is_audio:
                     await bot.send_audio(message.chat.id, file, caption="✅ **Audio Downloaded**", parse_mode="Markdown")
@@ -193,15 +248,16 @@ async def process_callback_button(callback_query: types.CallbackQuery):
             
             await bot.delete_message(message.chat.id, message.message_id) 
             try:
-                await bot.delete_message(message.chat.id, original_msg_id) 
+                await bot.delete_message(message.chat.id, original_msg_id)
             except Exception: pass 
                 
         else:
-             await bot.edit_message_text("❌ មានបញ្ហា។ សាកល្បងម្ដងទៀត ឬ បញ្ហាមកពី(Link Private)ដែលមិនអនុញ្ញាតឲ្យទាញយកបាន។", chat_id=message.chat.id, message_id=message.message_id)
+             await bot.edit_message_text("❌ ទាញយកមិនបាន។ Link អាចខូច ឬ Private។", chat_id=message.chat.id, message_id=message.message_id)
              
     except Exception as e:
         await bot.edit_message_text(f"Error: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
 
+# ៦.៨ Logic ទាញយក (yt-dlp)
 def download_logic(url, audio_only=False):
     opts = {
         'format': 'best',
@@ -223,19 +279,23 @@ def download_logic(url, audio_only=False):
         print(f"DL Error: {e}")
         return None
 
+# ៦.៩ ទទួល Link (Text Handler) - ដាក់នៅក្រោមគេបង្អស់! ⚠️
 @dp.message_handler()
 async def check_link_and_limit(message: types.Message):
     url = message.text.strip()
     
-    if not any(domain in url for domain in ["tiktok.com", "facebook.com", "fb.watch"]):
+    # ពិនិត្យ Link (បន្ថែម pinterest.com និង pin.it) ✅
+    allowed_domains = ["tiktok.com", "facebook.com", "fb.watch", "pinterest.com", "pin.it"]
+    
+    if not any(domain in url for domain in allowed_domains):
         if message.content_type == 'text':
-             await message.reply("⚠️ **Link មិនត្រឹមត្រូវ!**\nសូមផ្ញើ Link TikTok ឬ Facebook។", parse_mode="Markdown")
+             await message.reply("⚠️ **Link មិនត្រឹមត្រូវ!**\nសូមផ្ញើ Link TikTok, Facebook ឬ Pinterest។", parse_mode="Markdown")
         return
 
     user_id = message.from_user.id
     user = get_user_data(user_id)
     
-    # [កែប្រែ] លក្ខខណ្ឌពិនិត្យមើលថាលើសពី 10 ឬនៅ
+    # Check Limit 10
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 10:
         await send_payment_prompt(message)
         return
