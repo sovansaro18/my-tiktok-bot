@@ -106,7 +106,7 @@ async def send_help(message: types.Message):
         "2️⃣ Copy Link វីដេអូ។\n"
         "3️⃣ យកមក Paste ក្នុង Bot នេះ។\n"
         "4️⃣ ជ្រើសរើស **Video** ឬ **Audio** ជាការស្រេច!\n\n"
-        "💡 *គាំទ្រ: tiktok.com, facebook.com, pinterest.com*"
+        "💡 *បញ្ជាក់: Bot អាចទាញយកបានទាំង TikTok (No Watermark) និង Facebook HD។*"
     )
     await message.reply(msg, parse_mode="Markdown")
 
@@ -209,7 +209,6 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     download_type = callback_query.data
     
     user = get_user_data(user_id)
-    # Check limit 10
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 10:
         await bot.answer_callback_query(callback_query.id, "អស់ចំនួនកំណត់ហើយ!", show_alert=True)
         await send_payment_prompt(message)
@@ -257,15 +256,17 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     except Exception as e:
         await bot.edit_message_text(f"Error: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
 
-# ៦.៨ Logic ទាញយក (yt-dlp)
+# ៦.៨ Logic ទាញយក (yt-dlp) [កែប្រែ User-Agent]
 def download_logic(url, audio_only=False):
+    # កំណត់ User-Agent ដូចទូរស័ព្ទ Android (ដើម្បីបន្លំ Pinterest)
     opts = {
         'format': 'best',
         'outtmpl': f'{DOWNLOAD_PATH}%(id)s.%(ext)s',
         'quiet': True,
         'noplaylist': True,
         'socket_timeout': 15,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'referer': 'https://www.pinterest.com/', # បន្ថែម Referer
     }
     
     if audio_only:
@@ -279,12 +280,11 @@ def download_logic(url, audio_only=False):
         print(f"DL Error: {e}")
         return None
 
-# ៦.៩ ទទួល Link (Text Handler) - ដាក់នៅក្រោមគេបង្អស់! ⚠️
+# ៦.៩ ទទួល Link (Text Handler)
 @dp.message_handler()
 async def check_link_and_limit(message: types.Message):
     url = message.text.strip()
     
-    # ពិនិត្យ Link (បន្ថែម pinterest.com និង pin.it) ✅
     allowed_domains = ["tiktok.com", "facebook.com", "fb.watch", "pinterest.com", "pin.it"]
     
     if not any(domain in url for domain in allowed_domains):
@@ -295,7 +295,6 @@ async def check_link_and_limit(message: types.Message):
     user_id = message.from_user.id
     user = get_user_data(user_id)
     
-    # Check Limit 10
     if user_id != ADMIN_ID and user.get("status") != "premium" and user.get("downloads_count", 0) >= 10:
         await send_payment_prompt(message)
         return

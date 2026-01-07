@@ -1,5 +1,5 @@
 aiogram==2.25.1
-yt-dlp
+yt-dlp>=2024.0.0
 aiohttp
 pymongo
 dnspython
