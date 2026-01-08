@@ -8,10 +8,13 @@ import yt_dlp
 from aiohttp import web
 import pymongo
 
+# --- ១. ការកំណត់ (Configuration) ---
+# ប្រើ Token ថ្មីដែលបងបានដាក់
 API_TOKEN = os.getenv('BOT_TOKEN', '8511895970:AAGdnSn0kKsh5_Ejiu0LuljE-kBeN3VnGH0')
 ADMIN_ID = 8399209514
 MONGO_URI = "mongodb+srv://admin:123@downloader.xur9mwk.mongodb.net/?appName=downloader"
 
+# --- ២. ភ្ជាប់ MongoDB ---
 try:
     client = pymongo.MongoClient(MONGO_URI)
     db = client['downloader_bot']
@@ -20,6 +23,7 @@ try:
 except Exception as e:
     print(f"❌ បញ្ហាភ្ជាប់ MongoDB: {e}")
 
+# --- ៣. កំណត់កន្លែង Save ---
 DOWNLOAD_PATH = '/tmp/' if os.getenv('RENDER') else 'downloads/'
 if not os.path.exists(DOWNLOAD_PATH) and not os.getenv('RENDER'):
     os.makedirs(DOWNLOAD_PATH)
@@ -28,6 +32,7 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
+# --- ៤. Logic គ្រប់គ្រង User ---
 def get_user_data(user_id):
     user = users_collection.find_one({"user_id": user_id})
     if not user:
@@ -52,6 +57,7 @@ def increment_download(user_id):
         {"$inc": {"downloads_count": 1}}
     )
 
+# --- ៥. Web Server (Keep Alive) ---
 async def handle(request):
     return web.Response(text="Bot is running smoothly!")
 
@@ -64,7 +70,9 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
+# --- ៦. Bot Handlers ---
 
+# ៦.១ Start Command
 @dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
     user = get_user_data(message.from_user.id)
@@ -90,6 +98,7 @@ async def send_welcome(message: types.Message):
     msg += "\n\n👇 **ផ្ញើ Link របស់អ្នកមកទីនេះដើម្បីទាញយក!**"
     await message.reply(msg, parse_mode="Markdown")
 
+# ៦.២ Help Command
 @dp.message_handler(commands=['help'])
 async def send_help(message: types.Message):
     msg = (
@@ -102,6 +111,7 @@ async def send_help(message: types.Message):
     )
     await message.reply(msg, parse_mode="Markdown")
 
+# ៦.៣ Plan Command
 @dp.message_handler(commands=['plan'])
 async def send_plan(message: types.Message):
     user = get_user_data(message.from_user.id)
@@ -123,15 +133,42 @@ async def send_plan(message: types.Message):
              
     await message.reply(msg, parse_mode="Markdown")
 
+# ៦.៤ Support Command
 @dp.message_handler(commands=['support'])
 async def send_support(message: types.Message):
     msg = (
         "☎️ **ទាក់ទងជំនួយ (Support):**\n\n"
         "ប្រសិនបើ Bot មានបញ្ហា ឬចង់បង់ប្រាក់៖\n"
         "👉 សូមទាក់ទង Admin: @Sovansaro\n\n"
+        "⏰ ម៉ោងធ្វើការ: 8:00 AM - 8:00 PM"
     )
     await message.reply(msg, parse_mode="Markdown")
 
+# ៦.៥ Admin Stats Command (✨ មុខងារថ្មីសម្រាប់មើលចំនួនមនុស្ស)
+@dp.message_handler(commands=['stats'])
+async def admin_stats(message: types.Message):
+    # អនុញ្ញាតឲ្យតែ Admin ប៉ុណ្ណោះ
+    if message.from_user.id != ADMIN_ID: return
+    
+    try:
+        # រាប់ចំនួនអ្នកប្រើប្រាស់សរុប
+        total_users = users_collection.count_documents({})
+        # រាប់ចំនួន Premium
+        premium_users = users_collection.count_documents({"status": "premium"})
+        # រាប់ចំនួន Free
+        free_users = total_users - premium_users
+        
+        msg = (
+            "📊 **របាយការណ៍ស្ថិតិ (Statistics):**\n\n"
+            f"👥 អ្នកប្រើប្រាស់សរុប: **{total_users}** នាក់\n"
+            f"🌟 សមាជិក Premium: **{premium_users}** នាក់\n"
+            f"👤 អ្នកប្រើសាកល្បង: **{free_users}** នាក់\n"
+        )
+        await message.reply(msg, parse_mode="Markdown")
+    except Exception as e:
+        await message.reply(f"⚠️ Error Checking Stats: {e}")
+
+# ៦.៦ Admin Approve Command
 @dp.message_handler(commands=['approve'])
 async def admin_approve(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -151,6 +188,7 @@ async def admin_approve(message: types.Message):
     except Exception as e:
         await message.reply(f"⚠️ Error: {e}")
 
+# ៦.៧ ទទួលវិក័យបត្រ
 @dp.message_handler(content_types=['photo'])
 async def handle_receipt(message: types.Message):
     user_id = message.from_user.id
@@ -163,6 +201,7 @@ async def handle_receipt(message: types.Message):
     caption = f"📩 **វិក័យបត្រថ្មី!**\nUser: {message.from_user.full_name}\nID: `{user_id}`\n\nApprove: `/approve {user_id}`"
     await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
 
+# Function បង្ហាញ QR Code
 async def send_payment_prompt(message: types.Message):
     msg_text = (
         "🔒 **អស់ចំនួនសាកល្បងហើយ!** (10/10)\n\n"
@@ -179,6 +218,7 @@ async def send_payment_prompt(message: types.Message):
     else:
         await message.answer(msg_text + "\n(QR Code កំពុងរៀបចំ សូមទាក់ទង Admin)")
 
+# ៦.៨ ទទួលការចុចប៊ូតុង
 @dp.callback_query_handler(lambda c: c.data in ['dl_video', 'dl_audio'])
 async def process_callback_button(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -241,6 +281,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     except Exception as e:
         await bot.edit_message_text(f"Error: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
 
+# ៦.៩ Logic ទាញយក
 def download_logic(url, audio_only=False):
     opts = {
         'format': 'best',
@@ -262,6 +303,7 @@ def download_logic(url, audio_only=False):
         print(f"DL Error: {e}")
         return None
 
+# ៦.១០ ទទួល Link (Text Handler)
 @dp.message_handler()
 async def check_link_and_limit(message: types.Message):
     url = message.text.strip()
