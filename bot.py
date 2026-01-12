@@ -277,7 +277,6 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     except Exception as e:
         await bot.edit_message_text(f"Error: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
 
-# ៦.៩ Logic ទាញយក
 def download_logic(url, audio_only=False):
     opts = {
         'format': 'best',
