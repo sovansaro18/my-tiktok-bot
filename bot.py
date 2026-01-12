@@ -238,7 +238,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     await bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=message.message_id,
-        text="⬇️ **កំពុងទាញយ...**",
+        text="⬇️ **កំពុងទាញយក...**",
         parse_mode="Markdown"
     )
     
