@@ -8,13 +8,10 @@ import yt_dlp
 from aiohttp import web
 import pymongo
 
-# --- ១. ការកំណត់ (Configuration) ---
-# ប្រើ Token ថ្មីដែលបងបានដាក់
 API_TOKEN = os.getenv('BOT_TOKEN', '8511895970:AAGdnSn0kKsh5_Ejiu0LuljE-kBeN3VnGH0')
 ADMIN_ID = 8399209514
 MONGO_URI = "mongodb+srv://admin:123@downloader.xur9mwk.mongodb.net/?appName=downloader"
 
-# --- ២. ភ្ជាប់ MongoDB ---
 try:
     client = pymongo.MongoClient(MONGO_URI)
     db = client['downloader_bot']
@@ -23,7 +20,6 @@ try:
 except Exception as e:
     print(f"❌ បញ្ហាភ្ជាប់ MongoDB: {e}")
 
-# --- ៣. កំណត់កន្លែង Save ---
 DOWNLOAD_PATH = '/tmp/' if os.getenv('RENDER') else 'downloads/'
 if not os.path.exists(DOWNLOAD_PATH) and not os.getenv('RENDER'):
     os.makedirs(DOWNLOAD_PATH)
@@ -205,7 +201,7 @@ async def handle_receipt(message: types.Message):
 async def send_payment_prompt(message: types.Message):
     msg_text = (
         "🔒 **អស់ចំនួនសាកល្បងហើយ!** (10/10)\n\n"
-        "💰 **តម្លៃសេវា: 2$ (មួយជីវិត)**\n"
+        "💰 **បង់ប្រាក់ 2$ ដើម្បីប្រើបានឥតដែកកំណត់។**\n"
         "➖➖➖➖➖➖➖➖➖➖\n"
         "1. ស្កេន QR Code ខាងលើដើម្បីបង់ប្រាក់។\n"
         "2. ផ្ញើរូបវិក័យបត្រមកទីនេះ។\n"
@@ -242,7 +238,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     await bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=message.message_id,
-        text="⬇️ **កំពុងទាញយកពី Server...**\n(សូមរង់ចាំបន្តិច...)",
+        text="⬇️ **កំពុងទាញយ...**",
         parse_mode="Markdown"
     )
     
@@ -255,7 +251,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
             await bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=message.message_id,
-                text="⬆️ **កំពុង Upload ផ្ញើជូនអ្នក...**",
+                text="⬆️ **កំពុងបញ្ជូនមក...**",
                 parse_mode="Markdown"
             )
 
