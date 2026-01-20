@@ -77,8 +77,10 @@ async def send_welcome(message: types.Message):
     
     msg = (
         f"👋 **សួស្ដី {message.from_user.first_name}!**\n\n"
-        "📥 **All-in-One Downloader**\n"
-        "ទាញយកវីដេអូ TikTok & Facebook ដោយគ្មាន Watermark។\n"
+        "**ខ្ញុំគឺជា Bot របស់ RAVI**\n"
+        "ដែលមានតួរនាទី ទាញយកវីដេអូ TikTok ដោយមិនជាប់ឡូហ្គោ។\n"
+        "និង ទាញយកវីដេអូពី Facebook ផងដែរ។\n"
+        "អ្នកអាចទាញយកជាប្រភេទ វីដេអូ ឬ សំឡេងក៏បាន។\n"
         "➖➖➖➖➖➖➖➖➖➖\n"
     )
     
