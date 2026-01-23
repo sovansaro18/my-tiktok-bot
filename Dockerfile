@@ -22,4 +22,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # បញ្ជាឱ្យ Run Bot
-CMD ["python", "main.py"]
+CMD ["sh", "-c", "pip install -U yt-dlp && python main.py"]
