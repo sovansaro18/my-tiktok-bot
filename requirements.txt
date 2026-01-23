@@ -3,3 +3,4 @@ yt-dlp>=2024.0.0
 aiohttp
 pymongo
 dnspython
+python-dotenv

@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
@@ -8,9 +9,20 @@ import yt_dlp
 from aiohttp import web
 import pymongo
 
-API_TOKEN = os.getenv('BOT_TOKEN', '8511895970:AAGdnSn0kKsh5_Ejiu0LuljE-kBeN3VnGH0')
-ADMIN_ID = 8399209514
-MONGO_URI = "mongodb+srv://admin:123@downloader.xur9mwk.mongodb.net/?appName=downloader"
+# โหลด Environment Variables ពីไฟล์ .env
+load_dotenv()
+
+# ទាញយកค่าពី Environment Variables ដោយไม่มีค่า Default
+API_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_ID = int(os.getenv('ADMIN_ID'))
+MONGO_URI = os.getenv('MONGO_URI')
+
+# ពិនិត្យមើលว่า Variables សំខាន់ៗត្រូវបានកំណត់ឬยัง
+if not all([API_TOKEN, MONGO_URI, ADMIN_ID]):
+    raise RuntimeError("❌ សូមប្រាកដថាអ្នកបានកំណត់ BOT_TOKEN, MONGO_URI, និង ADMIN_ID នៅក្នុងไฟล์ .env")
+
+# កំណត់ค่าคงที่ (Constant) សម្រាប់ទំហំ File អតិបរមា
+TELEGRAM_MAX_FILE_SIZE = 49 * 1024 * 1024  # 49 MB
 
 try:
     client = pymongo.MongoClient(MONGO_URI)
@@ -73,10 +85,7 @@ async def send_welcome(message: types.Message):
     
     msg = (
         f"👋 **សួស្ដី {message.from_user.first_name}!**\n\n"
-        "**ខ្ញុំគឺជា Bot របស់ RAVI**\n"
-        "ដែលមានតួរនាទី ទាញយកវីដេអូ TikTok ដោយមិនជាប់ឡូហ្គោ។\n"
-        "និង ទាញយកវីដេអូពី Facebook ផងដែរ។\n"
-        "អ្នកអាចទាញយកជាប្រភេទ វីដេអូ ឬ សំឡេងក៏បាន។\n"
+        "**សូមស្វាគមន៍! មកកាន់ Bot យើងខ្ញុំ។**\n"
         "➖➖➖➖➖➖➖➖➖➖\n"
     )
     
@@ -100,7 +109,7 @@ async def send_help(message: types.Message):
         "2️⃣ Copy Link វីដេអូដែលអ្នកចង់បាន។\n"
         "3️⃣ យកមក Paste ក្នុង Bot នេះ។\n"
         "4️⃣ ជ្រើសរើស **Video** ឬ **Audio** ជាការស្រេច!\n\n"
-        "💡 *បញ្ជាក់: Bot អាចទាញយកវីដែអូដែលមានទំហំត្រឹម 50MB ចុះក្រោមប៉ុណ្ណោះ។*"
+        "💡 *បញ្ជាក់: Bot អាចទាញយកវីដែអូដែលមានទំហំត្រឹម 49MB ចុះក្រោមប៉ុណ្ណោះ។*"
     )
     await message.reply(msg, parse_mode="Markdown")
 
@@ -195,6 +204,37 @@ async def send_payment_prompt(message: types.Message):
     else:
         await message.answer(msg_text + "\n(QR Code កំពុងរៀបចំ សូមទាក់ទង Admin)")
 
+def download_media(url, audio_only=False):
+    ydl_opts = {
+        'outtmpl': f'{DOWNLOAD_PATH}%(id)s.%(ext)s',
+        'quiet': True,
+        'noplaylist': True,
+        'socket_timeout': 15,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    }
+    
+    if audio_only:
+        ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best'
+    else:
+        ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            filesize = info.get('filesize') or info.get('filesize_approx')
+            
+            if filesize and filesize > TELEGRAM_MAX_FILE_SIZE:
+                size_mb = round(filesize / 1024 / 1024, 2)
+                return ("error_too_large", f"{size_mb} MB")
+
+            ydl.download([url])
+            return ("success", ydl.prepare_filename(info))
+            
+    except Exception as e:
+        # << MODIFIED: បន្ថែម print() ដើម្បីមើល Error លម្អិតនៅក្នុង Console/Logs
+        print(f"🛑 YTDLP Exception Details: {e}")
+        return ("error_download", str(e))
+
 @dp.callback_query_handler(lambda c: c.data in ['dl_video', 'dl_audio'])
 async def process_callback_button(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -218,16 +258,19 @@ async def process_callback_button(callback_query: types.CallbackQuery):
     await bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=message.message_id,
-        text="⬇️ **កំពុងទាញយក...**",
+        text="⏳ **កំពុងពិនិត្យ Link...**",
         parse_mode="Markdown"
     )
     
+    filename = None
     try:
         loop = asyncio.get_event_loop()
         is_audio = (download_type == 'dl_audio')
-        filename = await loop.run_in_executor(None, download_logic, url, is_audio)
         
-        if filename:
+        status, data = await loop.run_in_executor(None, download_media, url, is_audio)
+        
+        if status == "success":
+            filename = data
             await bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=message.message_id,
@@ -244,49 +287,33 @@ async def process_callback_button(callback_query: types.CallbackQuery):
             if user_id != ADMIN_ID and user.get("status") != "premium":
                 increment_download(user_id)
             
-            if os.path.exists(filename): os.remove(filename)
-            
             await bot.delete_message(message.chat.id, message.message_id) 
             try:
                 await bot.delete_message(message.chat.id, original_msg_id)
             except Exception: pass 
                 
-        else:
-             await bot.edit_message_text("❌ ទាញយកមិនបាន។ Link អាចខូច ឬ Private។", chat_id=message.chat.id, message_id=message.message_id)
+        elif status == "error_too_large":
+             await bot.edit_message_text(f"❌ **ទំហំ File ធំពេក!**\nវីដេអូនេះមានទំហំ **{data}** ដែលលើសពីដែនកំណត់ 49MB របស់ Telegram។", chat_id=message.chat.id, message_id=message.message_id)
+        
+        else: # status == "error_download"
+             # << MODIFIED: បង្ហាញ Error លម្អិតទៅកាន់ User ដើម្បីងាយស្រួល Debug
+             await bot.edit_message_text(f"❌ **ទាញយកមិនបាន។**\n`Error: {data}`", chat_id=message.chat.id, message_id=message.message_id)
              
     except Exception as e:
-        await bot.edit_message_text(f"Error: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
-
-def download_logic(url, audio_only=False):
-    opts = {
-        'format': 'best',
-        'outtmpl': f'{DOWNLOAD_PATH}%(id)s.%(ext)s',
-        'quiet': True,
-        'noplaylist': True,
-        'socket_timeout': 15,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    }
-    
-    if audio_only:
-        opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best' 
-    
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return ydl.prepare_filename(info)
-    except Exception as e:
-        print(f"DL Error: {e}")
-        return None
+        await bot.edit_message_text(f"An unexpected error occurred: {str(e)}", chat_id=message.chat.id, message_id=message.message_id)
+    finally:
+        if filename and os.path.exists(filename):
+            os.remove(filename)
 
 @dp.message_handler()
 async def check_link_and_limit(message: types.Message):
     url = message.text.strip()
     
-    allowed_domains = ["tiktok.com", "facebook.com", "fb.watch"]
+    allowed_domains = ["tiktok.com", "facebook.com", "fb.watch", "instagram.com"]
     
     if not any(domain in url for domain in allowed_domains):
         if message.content_type == 'text':
-             await message.reply("⚠️ **Link មិនត្រឹមត្រូវ!**\nសូមផ្ញើ Link TikTok ឬ Facebook។", parse_mode="Markdown")
+             await message.reply("⚠️ **Link មិនត្រឹមត្រូវ!**\nសូមផ្ញើ Link TikTok, Facebook, ឬ Instagram។", parse_mode="Markdown")
         return
 
     user_id = message.from_user.id
