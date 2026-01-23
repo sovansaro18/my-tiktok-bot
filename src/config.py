@@ -1,12 +1,12 @@
 import os
 from dotenv import load_dotenv
 
-# Load ទិន្នន័យពី .env
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 ADMIN_ID = os.getenv("ADMIN_ID")
+PORT = int(os.getenv("PORT", 10000))
 
 # ត្រួតពិនិត្យមើលថាមានទិន្នន័យគ្រប់គ្រាន់ឬអត់
 if not all([BOT_TOKEN, MONGO_URI, ADMIN_ID]):
