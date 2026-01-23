@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["sh", "-c", "pip install -U yt-dlp && python main.py"]
+CMD ["python", "main.py"]
