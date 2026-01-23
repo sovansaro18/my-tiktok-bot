@@ -1,0 +1,22 @@
+# 1. ការពារសុវត្ថិភាព (សំខាន់បំផុត!)
+.env
+.env.local
+
+# 2. មិនឱ្យជាប់ Folder Library (ធ្ងន់ណាស់ កុំ Push ទៅ)
+venv/
+env/
+.venv/
+
+# 3. មិនឱ្យជាប់ File សម្រាមរបស់ Python
+__pycache__/
+*.py[cod]
+
+# 4. មិនឱ្យជាប់ Video ដែលបាន Download
+downloads/
+*.mp4
+*.mp3
+*.m4a
+
+# 5. ផ្សេងៗ (OS Files)
+.DS_Store
+Thumbs.db

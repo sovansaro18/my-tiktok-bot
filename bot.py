@@ -9,20 +9,17 @@ import yt_dlp
 from aiohttp import web
 import pymongo
 
-# โหลด Environment Variables ពីไฟล์ .env
 load_dotenv()
 
-# ទាញយកค่าពី Environment Variables ដោយไม่มีค่า Default
+
 API_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
 MONGO_URI = os.getenv('MONGO_URI')
 
-# ពិនិត្យមើលว่า Variables សំខាន់ៗត្រូវបានកំណត់ឬยัง
 if not all([API_TOKEN, MONGO_URI, ADMIN_ID]):
-    raise RuntimeError("❌ សូមប្រាកដថាអ្នកបានកំណត់ BOT_TOKEN, MONGO_URI, និង ADMIN_ID នៅក្នុងไฟล์ .env")
+    raise RuntimeError("❌ សូមប្រាកដថាអ្នកបានកំណត់ BOT_TOKEN, MONGO_URI, និង ADMIN_ID នៅក្នុង.env")
 
-# កំណត់ค่าคงที่ (Constant) សម្រាប់ទំហំ File អតិបរមា
-TELEGRAM_MAX_FILE_SIZE = 49 * 1024 * 1024  # 49 MB
+TELEGRAM_MAX_FILE_SIZE = 49 * 1024 * 1024 
 
 try:
     client = pymongo.MongoClient(MONGO_URI)
@@ -231,7 +228,6 @@ def download_media(url, audio_only=False):
             return ("success", ydl.prepare_filename(info))
             
     except Exception as e:
-        # << MODIFIED: បន្ថែម print() ដើម្បីមើល Error លម្អិតនៅក្នុង Console/Logs
         print(f"🛑 YTDLP Exception Details: {e}")
         return ("error_download", str(e))
 
@@ -295,8 +291,7 @@ async def process_callback_button(callback_query: types.CallbackQuery):
         elif status == "error_too_large":
              await bot.edit_message_text(f"❌ **ទំហំ File ធំពេក!**\nវីដេអូនេះមានទំហំ **{data}** ដែលលើសពីដែនកំណត់ 49MB របស់ Telegram។", chat_id=message.chat.id, message_id=message.message_id)
         
-        else: # status == "error_download"
-             # << MODIFIED: បង្ហាញ Error លម្អិតទៅកាន់ User ដើម្បីងាយស្រួល Debug
+        else:
              await bot.edit_message_text(f"❌ **ទាញយកមិនបាន។**\n`Error: {data}`", chat_id=message.chat.id, message_id=message.message_id)
              
     except Exception as e:
