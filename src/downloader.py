@@ -1,60 +1,124 @@
-import os
 import asyncio
+import logging
+import os
 import yt_dlp
 from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Optional, Any
 
-# កំណត់កន្លែងទុក File (ប្រើ /tmp/ បើនៅលើ Render ឬ Linux Server មួយចំនួន)
-DOWNLOAD_PATH = "/tmp/" if os.name != "nt" else "downloads/"
+# កំណត់ការ Log
+logger = logging.getLogger(__name__)
 
-if not os.path.exists(DOWNLOAD_PATH):
-    os.makedirs(DOWNLOAD_PATH)
+# កំណត់ Folder សម្រាប់ទុក File បណ្តោះអាសន្ន
+DOWNLOAD_DIR = "downloads"
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
 
 class Downloader:
-    def __init__(self):
-        self.executor = ThreadPoolExecutor(max_workers=2) # កំណត់ឱ្យ Download ព្រមគ្នាបានតែ 2 នាក់ទេ ដើម្បីកុំឱ្យគាំង Server
+    def __init__(self, max_workers: int = 2):
+        """
+        Initialize Downloader with a thread pool.
+        max_workers: Maximum number of concurrent downloads allowed.
+        """
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.max_retries = 3
 
-    def _download_sync(self, url: str, is_audio: bool = False) -> dict:
-        """Function នេះដំណើរការនៅ Background (Sync)"""
-        
-        # កំណត់ Option សម្រាប់ yt-dlp
-        ydl_opts = {
-            'outtmpl': f'{DOWNLOAD_PATH}%(id)s.%(ext)s',
+    def _get_opts(self, download_type: str = "video") -> Dict[str, Any]:
+        """
+        Configure yt-dlp options based on download type.
+        """
+        common_opts = {
+            'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
-            'socket_timeout': 30,
-            # កំណត់ Format (យក MP4 សម្រាប់ Video, M4A សម្រាប់ Audio)
-            'format': 'bestaudio[ext=m4a]/bestaudio/best' if is_audio else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            # បន្លំថាជា Browser (User Agent)
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'max_filesize': 49 * 1024 * 1024,  # Limit 49MB (Telegram limit is 50MB)
+            'geo_bypass': True,
         }
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # 1. ទាញយកព័ត៌មានវីដេអូសិន (មិនទាន់ Download)
-                info = ydl.extract_info(url, download=False)
-                
-                # 2. ពិនិត្យទំហំ File (បើធំជាង 50MB គឺ Telegram មិនឱ្យផ្ញើទេ)
-                filesize = info.get('filesize') or info.get('filesize_approx') or 0
-                if filesize > 49 * 1024 * 1024: # 49MB Limit
-                    return {"status": "error", "message": "file_too_large", "size": filesize}
+        if download_type == "audio":
+            common_opts.update({
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'm4a',
+                }]
+            })
+        else:
+            # Video: Prefer MP4 for Telegram compatibility
+            common_opts.update({
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'merge_output_format': 'mp4'
+            })
+        
+        return common_opts
 
-                # 3. ចាប់ផ្តើម Download
-                ydl.download([url])
+    def _download_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            try:
+                info = ydl.extract_info(url, download=True)
                 
-                # 4. យកឈ្មោះ File ដែលបាន Download
+                if 'entries' in info:
+                    info = info['entries'][0]
+
                 filename = ydl.prepare_filename(info)
-                return {"status": "success", "path": filename, "title": info.get('title', 'Video')}
+                
+                if opts.get('postprocessors'):
+                    base, _ = os.path.splitext(filename)
+                    filename = f"{base}.m4a"
 
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+                return {
+                    "status": "success",
+                    "file_path": filename,
+                    "title": info.get('title', 'Unknown'),
+                    "duration": info.get('duration', 0),
+                    "uploader": info.get('uploader', 'Unknown')
+                }
 
-    async def download(self, url: str, is_audio: bool = False):
-        """Function នេះហៅ _download_sync មកដំណើរការបែប Asynchronous"""
+            except yt_dlp.utils.DownloadError as e:
+                error_msg = str(e)
+                if "File is larger than" in error_msg:
+                    return {"status": "error", "message": "File too large (>49MB)."}
+                return {"status": "error", "message": f"Download failed: {error_msg}"}
+            except Exception as e:
+                return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+
+    async def download(self, url: str, type: str = "video") -> Dict[str, Any]:
+        """
+        Async wrapper for downloading media with Retry Logic.
+        """
+        opts = self._get_opts(type)
         loop = asyncio.get_running_loop()
-        # Run នៅក្នុង Thread ដាច់ដោយឡែក ដើម្បីកុំឱ្យ Bot គាំង
-        result = await loop.run_in_executor(self.executor, self._download_sync, url, is_audio)
-        return result
 
-# បង្កើត Object សម្រាប់ប្រើ
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                logger.info(f"⬇️ Downloading ({type}) [Attempt {attempt}]: {url}")
+                
+                # Run blocking code in thread pool
+                result = await loop.run_in_executor(
+                    self.executor, 
+                    self._download_sync, 
+                    url, 
+                    opts
+                )
+
+                if result["status"] == "success":
+                    logger.info(f"✅ Download complete: {result['file_path']}")
+                    return result
+                
+                if "File too large" in result["message"]:
+                    logger.warning(f"⚠️ {result['message']}")
+                    return result
+
+                logger.warning(f"⚠️ Attempt {attempt} failed: {result['message']}")
+
+            except Exception as e:
+                logger.error(f"❌ Critical error in download wrapper: {e}")
+                return {"status": "error", "message": "Internal server error."}
+            
+            if attempt < self.max_retries:
+                await asyncio.sleep(attempt)
+
+        return {"status": "error", "message": "Failed after 3 attempts. Please try again later."}
+
 downloader = Downloader()
