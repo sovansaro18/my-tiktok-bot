@@ -23,7 +23,10 @@ async def cmd_start(message: Message):
     user_data, is_new = await db.get_user(user_id)
     
     if is_new:
-        await send_log(f"🆕 New User Joined: {message.from_user.full_name} (`{user_id}`)")
+        await send_log(
+            f"🆕 New User Joined: {message.from_user.full_name} (`{user_id}`)",
+            bot=message.bot  # ← បន្ថែមនេះ
+        )
 
     status_icon = "💎" if user_data.get("status") == "premium" else "🆓"
     text = (
@@ -72,8 +75,15 @@ async def cmd_approve(message: Message):
         
         if success:
             await message.answer(f"✅ User {target_id} is now PREMIUM.")
-            await message.bot.send_message(target_id, "🎉 <b>Congratulations!</b> Your account has been upgraded to PREMIUM! 💎", parse_mode="HTML")
-            await send_log(f"👮‍♂️ Admin approved Premium for `{target_id}`")
+            await message.bot.send_message(
+                target_id, 
+                "🎉 <b>Congratulations!</b> Your account has been upgraded to PREMIUM! 💎", 
+                parse_mode="HTML"
+            )
+            await send_log(
+                f"👮‍♂️ Admin approved Premium for `{target_id}`",
+                bot=message.bot  # ← បន្ថែមនេះ
+            )
         else:
             await message.answer("❌ Failed to update user. Check ID.")
     except (IndexError, ValueError):
@@ -132,7 +142,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         f"✅ <b>Downloaded Successfully!</b>\n"
         f"📌 Title: {result.get('title')}\n"
         f"⏱ Duration: {result.get('duration')}s\n"
-        f"🤖 via @YourBotName"
+        f"🤖 via @ravi_downloader_bot"
     )
 
     try:

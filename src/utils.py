@@ -1,9 +1,9 @@
 from aiogram import Bot
 from src.config import LOG_CHANNEL_ID
 
-async def send_log(bot: Bot, text: str):
-
-    if not LOG_CHANNEL_ID:
+async def send_log(text: str, bot: Bot = None):
+    """ផ្ញើ log ទៅ channel"""
+    if not LOG_CHANNEL_ID or not bot:
         return
 
     try:
@@ -14,5 +14,4 @@ async def send_log(bot: Bot, text: str):
             disable_web_page_preview=True 
         )
     except Exception as e:
-
         print(f"⚠️ Failed to send log to channel: {e}")
