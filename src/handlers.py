@@ -222,7 +222,479 @@ async def cmd_plan(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
-# ... (Keep all admin commands: /broadcast, /broadcast_promo, /stats, /approve as before)
+@router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message):
+    """Admin command to broadcast message to all users."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    # Get message text after /broadcast
+    text = message.text.replace("/broadcast", "", 1).strip()
+    
+    if not text:
+        await message.answer(
+            "⚠️ <b>Usage:</b> /broadcast [your message]\n\n"
+            "<b>Example:</b>\n"
+            "/broadcast 🔧 Bot will be under maintenance for 30 minutes.\n\n"
+            "<b>Special Commands:</b>\n"
+            "/broadcast_promo - Send premium promotion with buy button",
+            parse_mode="HTML"
+        )
+        return
+    
+    # Get all users from database
+    try:
+        # Get all users
+        all_users = await db.users.find({}).to_list(length=None)
+        
+        total = len(all_users)
+        success = 0
+        failed = 0
+        
+        # Show progress
+        progress_msg = await message.answer(
+            f"📢 <b>Broadcasting...</b>\n"
+            f"Total users: {total}\n"
+            f"Sent: 0\n"
+            f"Failed: 0",
+            parse_mode="HTML"
+        )
+        
+        # Send to each user
+        for idx, user in enumerate(all_users, 1):
+            user_id = user.get("user_id")
+            
+            try:
+                # Send message with admin badge
+                broadcast_text = (
+                    f"📢 <b>Announcement from Admin</b>\n\n"
+                    f"{text}\n\n"
+                    f"<i>This is an official message from the bot administrator.</i>"
+                )
+                
+                await message.bot.send_message(
+                    chat_id=user_id,
+                    text=broadcast_text,
+                    parse_mode="HTML"
+                )
+                success += 1
+                
+                # Avoid Telegram rate limits (30 messages/second)
+                if idx % 20 == 0:
+                    await asyncio.sleep(1)
+                
+                # Update progress every 10 users
+                if idx % 10 == 0 or idx == total:
+                    await progress_msg.edit_text(
+                        f"📢 <b>Broadcasting...</b>\n"
+                        f"Total users: {total}\n"
+                        f"✅ Sent: {success}\n"
+                        f"❌ Failed: {failed}\n"
+                        f"Progress: {idx}/{total} ({idx*100//total}%)",
+                        parse_mode="HTML"
+                    )
+                
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Failed to send to {user_id}: {e}")
+        
+        # Final report
+        await progress_msg.edit_text(
+            f"✅ <b>Broadcast Complete!</b>\n\n"
+            f"📊 Total users: {total}\n"
+            f"✅ Successfully sent: {success}\n"
+            f"❌ Failed: {failed}\n\n"
+            f"<i>Failed users may have blocked the bot.</i>",
+            parse_mode="HTML"
+        )
+        # Log to channel
+        await send_log(
+            f"📢 Broadcast Sent\n"
+            f"By: Admin (`{ADMIN_ID}`)\n"
+            f"Success: {success}/{total}\n"
+            f"Message: {text[:100]}...",
+            bot=message.bot
+        )
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        await message.answer(
+            f"❌ <b>Broadcast Failed</b>\n\n"
+            f"Error: {escape(str(e))}",
+            parse_mode="HTML"
+        )
+
+@router.message(Command("broadcast_promo"))
+async def cmd_broadcast_promo(message: Message):
+    """Admin command to broadcast premium promotion with buy button."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        # Get premium users count to calculate remaining slots
+        stats = await db.count_users()
+        premium_sold = stats['premium']
+        slots_remaining = max(0, 15 - premium_sold)  # 15 slots total
+        
+        # Don't send if all slots are sold
+        if slots_remaining == 0:
+            await message.answer(
+                "⚠️ <b>All discount slots are sold out!</b>\n\n"
+                "All 15 lifetime discount slots have been claimed.\n"
+                "Update promotion or pricing before sending.",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Get all FREE users only
+        all_users = await db.users.find({"status": "free"}).to_list(length=None)
+        
+        total = len(all_users)
+        success = 0
+        failed = 0
+        
+        # Create buy button
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"💎 Buy Lifetime Premium - ${1.99:.2f}!",
+                    callback_data="buy_premium"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📋 See Premium Benefits",
+                    callback_data="premium_info"
+                )
+            ]
+        ])
+        
+        # Promotion message with lifetime and slots info
+        promo_text = (
+            "🎉 <b>LIMITED LIFETIME OFFER!</b> 🎉\n\n"
+            "💎 <b>Lifetime Premium Access</b>\n"
+            f"~~$3.00~~ → <b>${1.99:.2f}</b> (34% OFF!) 🔥\n\n"
+            f"⚡ <b>Only {slots_remaining} slots remaining!</b>\n"
+            f"📊 {premium_sold}/15 already claimed\n\n"
+            "<b>🎁 What You Get (FOREVER):</b>\n"
+            "✅ Unlimited downloads\n"
+            "✅ No daily limits\n"
+            "✅ Priority support 24/7\n"
+            "✅ Faster download speeds\n"
+            "✅ Ad-free experience\n"
+            "✅ Early access to new features\n\n"
+            "💰 <b>Pay once, use forever!</b>\n"
+            "⏰ <b>Hurry! Only {slots_remaining} lifetime slots left!</b>\n\n"
+            "<i>This is a one-time payment. No recurring fees! 🚀</i>"
+        )
+        
+        # Show progress
+        progress_msg = await message.answer(
+            f"💎 <b>Sending Lifetime Promo...</b>\n"
+            f"Target: Free users\n"
+            f"Total: {total}\n"
+            f"Slots remaining: {slots_remaining}/15\n"
+            f"Sent: 0",
+            parse_mode="HTML"
+        )
+        
+        # Send to each free user
+        for idx, user in enumerate(all_users, 1):
+            user_id = user.get("user_id")
+            
+            try:
+                await message.bot.send_message(
+                    chat_id=user_id,
+                    text=promo_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+                success += 1
+                
+                # Rate limiting
+                if idx % 20 == 0:
+                    await asyncio.sleep(1)
+                
+                # Update progress
+                if idx % 10 == 0 or idx == total:
+                    await progress_msg.edit_text(
+                        f"💎 <b>Sending Lifetime Promo...</b>\n"
+                        f"Target: Free users\n"
+                        f"Total: {total}\n"
+                        f"Slots remaining: {slots_remaining}/15\n"
+                        f"✅ Sent: {success}\n"
+                        f"❌ Failed: {failed}\n"
+                        f"Progress: {idx}/{total} ({idx*100//total}%)",
+                        parse_mode="HTML"
+                    )
+                
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Failed promo to {user_id}: {e}")
+        
+        # Calculate potential revenue
+        potential_revenue = slots_remaining * 1.99
+        
+        # Final report
+        await progress_msg.edit_text(
+            f"✅ <b>Promotion Campaign Complete!</b>\n\n"
+            f"🎯 Targeted: Free users\n"
+            f"📊 Total sent: {success}\n"
+            f"❌ Failed: {failed}\n\n"
+            f"💎 <b>Lifetime Slots:</b>\n"
+            f"• Sold: {premium_sold}/15\n"
+            f"• Remaining: {slots_remaining}/15\n"
+            f"• Potential revenue: ${potential_revenue:.2f}\n\n"
+            f"<i>Track conversions in /stats</i>",
+            parse_mode="HTML"
+        )
+        
+        # Log
+        await send_log(
+            f"💎 Lifetime Promo Sent\n"
+            f"Targeted: {total} free users\n"
+            f"Success: {success}\n"
+            f"Slots: {slots_remaining}/15 left\n"
+            f"Potential: ${potential_revenue:.2f}",
+            bot=message.bot
+        )
+        
+    except Exception as e:
+        logger.error(f"Promo broadcast error: {e}")
+        await message.answer(f"❌ Error: {escape(str(e))}", parse_mode="HTML")
+
+@router.callback_query(F.data == "buy_premium")
+async def handle_buy_premium(callback: CallbackQuery):
+    """Handle buy premium button click - Show QR Code payment."""
+    
+    # Check remaining slots
+    stats = await db.count_users()
+    premium_sold = stats['premium']
+    slots_remaining = max(0, 15 - premium_sold)
+    
+    # Check if sold out
+    if slots_remaining == 0:
+        await callback.message.edit_text(
+            "😢 <b>Sorry, All Slots Sold Out!</b>\n\n"
+            "All 15 lifetime discount slots have been claimed.\n\n"
+            "💬 Contact admin for regular pricing or future offers.",
+            parse_mode="HTML"
+        )
+        return
+    
+    # Check if payment.jpg exists
+    payment_qr_path = "payment.jpg"
+    
+    if not os.path.exists(payment_qr_path):
+        await callback.message.edit_text(
+            "❌ <b>Payment QR Code not found!</b>\n\n"
+            "Please contact admin to set up payment method.",
+            parse_mode="HTML"
+        )
+        logger.error(f"payment.jpg not found in project root!")
+        return
+    
+    payment_caption = (
+        "💳 <b>Lifetime Premium Payment</b>\n\n"
+        f"💎 <b>Lifetime Access:</b> ${1.99:.2f} (One-time payment)\n"
+        f"⚡ <b>Slots Remaining:</b> {slots_remaining}/15\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📱 <b>របៀបបង់ប្រាក់:</b>\n\n"
+        "1️⃣ ស្កេន QR Code ខាងក្រោម\n"
+        f"2️⃣ បង់ចំនួន <b>${1.99:.2f}</b>\n"
+        "3️⃣ ថតរូបវិក័យបត្រ (Screenshot)\n"
+        "4️⃣ ផ្ញើវិក័យបត្រមកទីនេះវិញ\n"
+        "5️⃣ រង់ចាំ Admin ពិនិត្យ និងបើកសិទ្ធ\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "✅ <b>ពេលវេលាដំណើរការ:</b> ក្នុងរយៈពេល 1 ម៉ោង\n"
+        "♾️ <b>រយៈពេលសុពលភាព:</b> LIFETIME (មិនផុតកំណត់)\n\n"
+        f"🆔 <b>User ID របស់អ្នក:</b> <code>{callback.from_user.id}</code>\n"
+        "<i>(សូមរក្សាទុក ID នេះ)</i>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🎁 <b>អត្ថប្រយោជន៍ Lifetime Premium:</b>\n"
+        "• ទាញយកគ្មានដែនកំណត់ (ជារៀងរហូត)\n"
+        "• មិនមានការរឹតបន្តឹងប្រចាំថ្ងៃ\n"
+        "• ល្បឿនទាញយករហ័ស\n"
+        "• គាំទ្រអាទិភាព 24/7\n"
+        "• គ្មានការបង់ប្រាក់ប្រចាំខែ\n"
+        "• បង់តែម្តង ប្រើរហូត! 🚀\n\n"
+        f"⚠️ <b>Hurry! Only {slots_remaining} discount slots left!</b>\n\n"
+        "❓ <b>មានសំណួរ?</b> ផ្ញើសារមក Admin នៅក្នុង Channel"
+    )
+    
+    try:
+        # Delete previous message
+        await callback.message.delete()
+        
+        # Send QR Code image
+        photo = FSInputFile(payment_qr_path)
+        await callback.message.answer_photo(
+            photo=photo,
+            caption=payment_caption,
+            parse_mode="HTML"
+        )
+        
+        # Log interest with slots info
+        await send_log(
+            f"💰 Premium Interest\n"
+            f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)\n"
+            f"Action: Opened payment QR Code\n"
+            f"Slots remaining: {slots_remaining}/15",
+            bot=callback.bot
+        )
+        
+    except Exception as e:
+        logger.error(f"Error showing QR code: {e}")
+        await callback.answer(
+            "❌ មានបញ្ហាក្នុងការបង្ហាញ QR Code។ សូមព្យាយាមម្តងទៀត។",
+            show_alert=True
+        )
+
+@router.callback_query(F.data == "premium_info")
+async def handle_premium_info(callback: CallbackQuery):
+    """Show detailed premium benefits."""
+    
+    # Get slots info
+    stats = await db.count_users()
+    premium_sold = stats['premium']
+    slots_remaining = max(0, 15 - premium_sold)
+    
+    info_text = (
+        "💎 <b>Lifetime Premium Membership</b>\n\n"
+        f"💰 <b>Price:</b> ~~$3.00~~ → <b>${1.99:.2f}</b>\n"
+        f"⚡ <b>Slots Left:</b> {slots_remaining}/15\n"
+        f"📊 <b>Already Sold:</b> {premium_sold}/15\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>📥 Downloads:</b>\n"
+        "✅ Unlimited downloads forever\n"
+        "✅ No daily/monthly limits\n"
+        "✅ All platforms supported\n"
+        "✅ High-quality (up to 1080p)\n\n"
+        "<b>⚡ Performance:</b>\n"
+        "🚀 Priority download queue\n"
+        "🚀 Faster download speeds\n"
+        "🚀 Multiple concurrent downloads\n\n"
+        "<b>🎯 Support:</b>\n"
+        "💬 Priority customer support\n"
+        "💬 Direct contact with admin\n"
+        "💬 24/7 assistance\n\n"
+        "<b>🎨 Features:</b>\n"
+        "✨ Ad-free experience\n"
+        "✨ Early access to new features\n"
+        "✨ Custom preferences\n"
+        "✨ Lifetime access (no expiration)\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💵 <b>One-Time Payment:</b>\n"
+        "• Pay <b>${1.99:.2f}</b> once\n"
+        "• Use forever\n"
+        "• No monthly fees\n"
+        "• No hidden charges\n\n"
+        f"⚠️ <b>Limited Offer:</b> Only {slots_remaining} slots left!\n\n"
+        "<i>After 15 sales, price returns to $3.00</i>"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=f"💳 Buy Now - ${1.99:.2f} ({slots_remaining} left)",
+                callback_data="buy_premium"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="❌ Close",
+                callback_data="close_info"
+            )
+        ]
+    ])
+    
+    await callback.message.edit_text(
+        info_text,
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+@router.callback_query(F.data == "close_info")
+async def handle_close_info(callback: CallbackQuery):
+    """Close premium info message."""
+    await callback.message.delete()
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message):
+    """Admin command to view bot statistics."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        stats = await db.count_users()
+        
+        # Calculate total downloads
+        pipeline = [
+            {"$group": {
+                "_id": None,
+                "total_downloads": {"$sum": "$downloads_count"}
+            }}
+        ]
+        
+        result = await db.users.aggregate(pipeline).to_list(length=1)
+        total_downloads = result[0]["total_downloads"] if result else 0
+        
+        # Lifetime slots info
+        premium_sold = stats['premium']
+        slots_remaining = max(0, 15 - premium_sold)
+        lifetime_revenue = premium_sold * 1.99
+        potential_revenue = slots_remaining * 1.99
+        
+        text = (
+            f"📊 <b>Bot Statistics</b>\n\n"
+            f"👥 Total Users: <b>{stats['total']}</b>\n"
+            f"💎 Premium Users: <b>{stats['premium']}</b>\n"
+            f"🆓 Free Users: <b>{stats['free']}</b>\n\n"
+            f"⬇️ Total Downloads: <b>{total_downloads}</b>\n"
+            f"📈 Avg per user: <b>{total_downloads // stats['total'] if stats['total'] > 0 else 0}</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💰 <b>Lifetime Discount Campaign:</b>\n"
+            f"• Price: ${1.99:.2f} (Lifetime)\n"
+            f"• Sold: <b>{premium_sold}/15</b>\n"
+            f"• Remaining: <b>{slots_remaining}/15</b>\n"
+            f"• Revenue: <b>${lifetime_revenue:.2f}</b>\n"
+            f"• Potential: <b>${potential_revenue:.2f}</b>\n\n"
+            f"{'⚠️ <b>All slots sold out!</b>' if slots_remaining == 0 else f'✅ <b>{slots_remaining} slots available</b>'}\n\n"
+            f"<i>Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+        )
+        
+        await message.answer(text, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Stats error: {e}")
+        await message.answer(f"❌ Error: {escape(str(e))}", parse_mode="HTML")
+
+@router.message(Command("approve"))
+async def cmd_approve(message: Message):
+    # Security: Use integer comparison for admin check
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        target_id = int(message.text.split()[1])
+        success = await db.set_premium(target_id)
+        
+        if success:
+            await message.answer(f"✅ User {target_id} is now PREMIUM.")
+            await message.bot.send_message(
+                target_id, 
+                "🎉 <b>Congratulations!</b> Your account has been upgraded to PREMIUM! 💎", 
+                parse_mode="HTML"
+            )
+            await send_log(
+                f"👮‍♂️ Admin approved Premium for `{target_id}`",
+                bot=message.bot
+            )
+        else:
+            await message.answer("❌ Failed to update user. Check ID.")
+    except (IndexError, ValueError):
+        await message.answer("⚠️ Usage: /approve [user_id]")
+
 
 
 @router.message(F.text.regexp(r'(https?://[^\s]+)'))
