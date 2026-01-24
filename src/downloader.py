@@ -13,28 +13,146 @@ DOWNLOAD_DIR = "downloads"
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
+# Cookies file path (optional - សម្រាប់ age-restricted content)
+COOKIES_FILE = os.getenv("COOKIES_FILE", "cookies.txt")
+
+
 class Downloader:
+    """
+    Async-compatible video/audio downloader using yt-dlp.
+    Supports: YouTube, TikTok, Facebook, Instagram, Twitter/X និង ច្រើនទៀត។
+    """
+
+    # User-Agent សម្រាប់គេចពី bot detection
+    USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    # Platform-specific extractor arguments
+    EXTRACTOR_ARGS = {
+        'youtube': {
+            # ប្រើ iOS client ដើម្បីជៀសវាង throttling និង bot detection
+            'player_client': ['ios', 'web'],
+            'skip': ['dash', 'hls'],
+        },
+        'tiktok': {
+            'api_hostname': 'api22-normal-c-useast2a.tiktokv.com',
+        },
+    }
+
     def __init__(self, max_workers: int = 2):
         """
         Initialize Downloader with a thread pool.
-        max_workers: Maximum number of concurrent downloads allowed.
+        
+        Args:
+            max_workers: Maximum number of concurrent downloads allowed.
         """
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.max_retries = 3
 
-    def _get_opts(self, download_type: str = "video") -> Dict[str, Any]:
+    def _detect_platform(self, url: str) -> str:
         """
-        Configure yt-dlp options based on download type.
+        Detect platform from URL for platform-specific optimizations.
+        
+        Args:
+            url: The video URL.
+            
+        Returns:
+            Platform name (youtube, tiktok, facebook, instagram, twitter, other)
         """
-        common_opts = {
+        url_lower = url.lower()
+        
+        if any(domain in url_lower for domain in ['youtube.com', 'youtu.be', 'youtube.com/shorts']):
+            return 'youtube'
+        elif any(domain in url_lower for domain in ['tiktok.com', 'vm.tiktok.com']):
+            return 'tiktok'
+        elif any(domain in url_lower for domain in ['facebook.com', 'fb.watch', 'fb.com']):
+            return 'facebook'
+        elif any(domain in url_lower for domain in ['instagram.com', 'instagr.am']):
+            return 'instagram'
+        elif any(domain in url_lower for domain in ['twitter.com', 'x.com', 't.co']):
+            return 'twitter'
+        
+        return 'other'
+
+    def _get_opts(self, download_type: str = "video", url: str = "") -> Dict[str, Any]:
+        """
+        Configure yt-dlp options based on download type and platform.
+        
+        Args:
+            download_type: "video" or "audio"
+            url: The URL to download (for platform detection)
+            
+        Returns:
+            Dictionary of yt-dlp options.
+        """
+        platform = self._detect_platform(url)
+        logger.info(f"🔍 Detected platform: {platform}")
+
+        # Base options សម្រាប់គ្រប់ platforms
+        common_opts: Dict[str, Any] = {
             'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
             'max_filesize': 49 * 1024 * 1024,  # Limit 49MB (Telegram limit is 50MB)
             'geo_bypass': True,
+            'socket_timeout': 30,
+            'retries': 5,
+            'fragment_retries': 5,
+            
+            # HTTP Headers សម្រាប់គេចពី bot detection
+            'http_headers': {
+                'User-Agent': self.USER_AGENT,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+            },
+            
+            # Extractor arguments
+            'extractor_args': self.EXTRACTOR_ARGS,
+            
+            # Sleep between requests ដើម្បីជៀសវាង rate limiting
+            'sleep_interval_requests': 1,
         }
 
+        # បន្ថែម cookies file ប្រសិនបើមាន
+        if os.path.exists(COOKIES_FILE):
+            common_opts['cookiefile'] = COOKIES_FILE
+            logger.info(f"🍪 Using cookies from: {COOKIES_FILE}")
+
+        # Platform-specific optimizations
+        if platform == 'youtube':
+            common_opts.update({
+                'age_limit': None,  # Allow all content
+                'sleep_interval': 2,  # Longer delay for YouTube
+                'sleep_interval_subtitles': 1,
+            })
+            
+        elif platform == 'tiktok':
+            # TikTok-specific headers
+            common_opts['http_headers'].update({
+                'Referer': 'https://www.tiktok.com/',
+                'Origin': 'https://www.tiktok.com',
+            })
+            
+        elif platform == 'instagram':
+            common_opts['http_headers'].update({
+                'Referer': 'https://www.instagram.com/',
+                'Origin': 'https://www.instagram.com',
+            })
+
+        # Format options based on download type
         if download_type == "audio":
             common_opts.update({
                 'format': 'bestaudio/best',
@@ -44,16 +162,35 @@ class Downloader:
                 }]
             })
         else:
-            # Video: Prefer MP4 for Telegram compatibility
-            common_opts.update({
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'merge_output_format': 'mp4'
-            })
-        
+            # Format selection with fallbacks
+            if platform == 'tiktok':
+                # TikTok usually has simpler format options
+                common_opts['format'] = 'best[ext=mp4]/best'
+            else:
+                common_opts.update({
+                    'format': (
+                        'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
+                        'bestvideo[height<=1080]+bestaudio/'
+                        'best[height<=1080][ext=mp4]/'
+                        'best[ext=mp4]/'
+                        'best'
+                    ),
+                    'merge_output_format': 'mp4'
+                })
+
         return common_opts
 
     def _download_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
-
+        """
+        Synchronous download function to run in thread pool.
+        
+        Args:
+            url: The video/audio URL to download.
+            opts: yt-dlp options dictionary.
+            
+        Returns:
+            Dictionary with status, file_path, and metadata.
+        """
         with yt_dlp.YoutubeDL(opts) as ydl:
             try:
                 info = ydl.extract_info(url, download=True)
@@ -86,8 +223,15 @@ class Downloader:
     async def download(self, url: str, type: str = "video") -> Dict[str, Any]:
         """
         Async wrapper for downloading media with Retry Logic.
+        
+        Args:
+            url: The video/audio URL to download.
+            type: "video" or "audio"
+            
+        Returns:
+            Dictionary with status, file_path, and metadata.
         """
-        opts = self._get_opts(type)
+        opts = self._get_opts(type, url)  # Pass URL for platform detection
         loop = asyncio.get_running_loop()
 
         for attempt in range(1, self.max_retries + 1):
