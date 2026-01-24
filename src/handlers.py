@@ -82,17 +82,26 @@ async def cmd_start(message: Message):
             bot=message.bot
         )
 
-    status_icon = "💎" if user_data.get("status") == "premium" else "🆓"
+    status = user_data.get("status")
+    downloads_count = user_data.get("downloads_count", 0)
+    
+    # Different display for Premium vs Free
+    if status == "premium":
+        status_icon = "💎"
+        status_text = "PREMIUM"
+        downloads_text = "Unlimited ♾️"
+    else:
+        status_icon = "🆓"
+        status_text = "FREE"
+        downloads_text = f"{downloads_count}/10"
+    
     text = (
         f"👋 <b>Hello {message.from_user.full_name}!</b>\n\n"
         f"I can download videos from TikTok, FB, IG, YouTube, etc.\n"
         f"Just send me a link!\n\n"
-        f"📊 <b>Your Status:</b> {user_data.get('status').upper()} {status_icon}\n"
-        f"⬇️ <b>Downloads:</b> {user_data.get('downloads_count')}/10 (Free Tier)"
+        f"📊 <b>Your Status:</b> {status_text} {status_icon}\n"
+        f"⬇️ <b>Downloads:</b> {downloads_text}"
     )
-    
-    if user_data.get("status") == "premium":
-        text = text.replace("/10 (Free Tier)", " (Unlimited)")
 
     await message.answer(text, parse_mode="HTML")
 
@@ -102,19 +111,32 @@ async def cmd_plan(message: Message):
     user_data, _ = await db.get_user(user_id)
     
     status = user_data.get("status")
-    count = user_data.get("downloads_count")
+    count = user_data.get("downloads_count", 0)
+    
+    # Different display for Premium vs Free
+    if status == "premium":
+        status_display = "PREMIUM 💎"
+        downloads_display = "Unlimited ♾️"
+        usage_note = "✨ <i>You are a Premium member. Enjoy unlimited downloads forever!</i>"
+    else:
+        status_display = "FREE 🆓"
+        downloads_display = f"{count}/10 (Daily limit)"
+        usage_note = (
+            "⚠️ <i>Limit: 10 downloads. Want unlimited access?</i>\n\n"
+            "💎 <b>Upgrade to Lifetime Premium for $1.99!</b>\n"
+            "• Pay once, use forever\n"
+            "• No monthly fees\n"
+            "• Unlimited downloads\n\n"
+            "Type /start and click the Premium button to upgrade!"
+        )
     
     text = (
         f"📊 <b>Usage Statistics</b>\n\n"
         f"👤 User: {message.from_user.full_name}\n"
-        f"🏷 Status: <b>{status.upper()}</b>\n"
-        f"🔢 Total Downloads: {count}\n\n"
+        f"🏷 Status: <b>{status_display}</b>\n"
+        f"📥 Downloads: <b>{downloads_display}</b>\n\n"
+        f"{usage_note}"
     )
-    
-    if status == "free":
-        text += "⚠️ <i>Limit: 10 downloads. Upgrade to Premium for unlimited access!</i>"
-    else:
-        text += "✨ <i>You are a Premium member. Enjoy unlimited downloads!</i>"
         
     await message.answer(text, parse_mode="HTML")
 
@@ -163,7 +185,7 @@ async def cmd_broadcast(message: Message):
                 broadcast_text = (
                     f"📢 <b>Announcement from Admin</b>\n\n"
                     f"{text}\n\n"
-                    f"<i>This is an official message from the bot administrator.</i>.<b>RAVI</b>"
+                    f"<i>This is an official message from the bot administrator.</i>"
                 )
                 
                 await message.bot.send_message(
