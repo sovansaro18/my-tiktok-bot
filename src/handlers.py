@@ -77,7 +77,7 @@ async def cmd_start(message: Message):
     if is_new:
         await send_log(
             f"🆕 New User Joined: {message.from_user.full_name} (`{user_id}`)",
-            bot=message.bot  # ← បន្ថែមនេះ
+            bot=message.bot
         )
 
     status_icon = "💎" if user_data.get("status") == "premium" else "🆓"
@@ -135,7 +135,7 @@ async def cmd_approve(message: Message):
             )
             await send_log(
                 f"👮‍♂️ Admin approved Premium for `{target_id}`",
-                bot=message.bot  # ← បន្ថែមនេះ
+                bot=message.bot
             )
         else:
             await message.answer("❌ Failed to update user. Check ID.")
@@ -211,6 +211,16 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             "The download took too long. Please try again with a shorter video.",
             parse_mode="HTML"
         )
+        
+        # ✅ FIX: Send error notification to admin
+        await send_log(
+            f"⏱ Download Timeout\n"
+            f"User: `{callback.from_user.id}`\n"
+            f"URL: {url}\n"
+            f"Type: {download_type}",
+            bot=callback.bot
+        )
+        
         await state.clear()
         return
     
@@ -218,6 +228,17 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         # Security: Escape error message to prevent XSS
         safe_message = escape(result.get('message', 'Unknown error'))
         await callback.message.edit_text(f"❌ <b>Error:</b> {safe_message}", parse_mode="HTML")
+        
+        # ✅ FIX: Send error notification to admin with detailed info
+        await send_log(
+            f"❌ Download Error\n"
+            f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)\n"
+            f"URL: {url}\n"
+            f"Type: {download_type}\n"
+            f"Error: {result.get('message', 'Unknown')}",
+            bot=callback.bot
+        )
+        
         await state.clear()
         return
 
@@ -249,12 +270,29 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         user_data, _ = await db.get_user(user_id)
         if user_data.get("status") == "free":
             await db.increment_download(user_id)
+        
+        # ✅ FIX: Send success notification to admin
+        await send_log(
+            f"✅ Download Success\n"
+            f"User: {callback.from_user.full_name} (`{user_id}`)\n"
+            f"Title: {safe_title}\n"
+            f"Type: {download_type}",
+            bot=callback.bot
+        )
             
         await callback.message.delete()
         
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         await callback.message.edit_text("❌ Failed to upload file. It might be too large for Telegram.")
+        
+        # ✅ FIX: Send upload error to admin
+        await send_log(
+            f"❌ Upload Error\n"
+            f"User: `{callback.from_user.id}`\n"
+            f"Error: {str(e)}",
+            bot=callback.bot
+        )
     finally:
         # Security: Use async file removal to avoid blocking event loop
         if file_path:

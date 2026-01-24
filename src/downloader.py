@@ -27,19 +27,21 @@ class Downloader:
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     )
 
     # Platform-specific extractor arguments
     EXTRACTOR_ARGS = {
         'youtube': {
-            # ប្រើ iOS client ដើម្បីជៀសវាង throttling និង bot detection
-            'player_client': ['ios', 'web'],
+            'player_client': ['ios', 'web', 'android'],
             'skip': ['dash', 'hls'],
         },
         'tiktok': {
             'api_hostname': 'api22-normal-c-useast2a.tiktokv.com',
         },
+        'instagram': {
+            'api_hostname': 'i.instagram.com',
+        }
     }
 
     def __init__(self, max_workers: int = 2):
@@ -113,21 +115,25 @@ class Downloader:
         # Base options សម្រាប់គ្រប់ platforms
         common_opts: Dict[str, Any] = {
             'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
-            'quiet': True,
-            'no_warnings': True,
+            'quiet': False,  # ✅ Changed to False for better debugging
+            'no_warnings': False,  # ✅ Changed to False to see warnings
             'noplaylist': True,
             'max_filesize': 49 * 1024 * 1024,  # Limit 49MB (Telegram limit is 50MB)
             'geo_bypass': True,
             'socket_timeout': 30,
-            'retries': 5,
-            'fragment_retries': 5,
+            'retries': 10,  # ✅ Increased from 5 to 10
+            'fragment_retries': 10,  # ✅ Increased from 5 to 10
+            
+            # ✅ Added verbose logging for debugging
+            'verbose': True,
+            'logger': logger,
             
             # HTTP Headers សម្រាប់គេចពី bot detection
             'http_headers': {
                 'User-Agent': self.USER_AGENT,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
+                'Accept-Encoding': 'gzip, deflate, br',  # ✅ Added 'br' (Brotli)
                 'DNT': '1',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
@@ -143,6 +149,10 @@ class Downloader:
             
             # Sleep between requests ដើម្បីជៀសវាង rate limiting
             'sleep_interval_requests': 1,
+            
+            # ✅ Added to handle errors better
+            'ignoreerrors': False,  # Don't skip errors
+            'no_color': True,  # Clean logs
         }
 
         # បន្ថែម cookies file ប្រសិនបើមាន
@@ -164,11 +174,30 @@ class Downloader:
                 'Referer': 'https://www.tiktok.com/',
                 'Origin': 'https://www.tiktok.com',
             })
+            # ✅ Add format for TikTok
+            common_opts['format'] = 'best'
             
         elif platform == 'instagram':
             common_opts['http_headers'].update({
                 'Referer': 'https://www.instagram.com/',
                 'Origin': 'https://www.instagram.com',
+                'X-Requested-With': 'XMLHttpRequest',
+            })
+            # ✅ Add format for Instagram
+            common_opts['format'] = 'best'
+            
+        elif platform == 'facebook':
+            common_opts['http_headers'].update({
+                'Referer': 'https://www.facebook.com/',
+                'Origin': 'https://www.facebook.com',
+            })
+            # ✅ Add format for Facebook
+            common_opts['format'] = 'best'
+            
+        elif platform == 'twitter':
+            common_opts['http_headers'].update({
+                'Referer': 'https://twitter.com/',
+                'Origin': 'https://twitter.com',
             })
 
         # Format options based on download type
@@ -181,21 +210,17 @@ class Downloader:
                 }]
             })
         else:
-            # Format selection with fallbacks
-            if platform == 'tiktok':
-                # TikTok usually has simpler format options
-                common_opts['format'] = 'best[ext=mp4]/best'
-            else:
-                common_opts.update({
-                    'format': (
+            # ✅ Only override format if not already set by platform
+            if 'format' not in common_opts or platform == 'youtube':
+                if platform == 'youtube':
+                    common_opts['format'] = (
                         'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
                         'bestvideo[height<=1080]+bestaudio/'
                         'best[height<=1080][ext=mp4]/'
                         'best[ext=mp4]/'
                         'best'
-                    ),
-                    'merge_output_format': 'mp4'
-                })
+                    )
+                    common_opts['merge_output_format'] = 'mp4'
 
         return common_opts
 
@@ -212,7 +237,11 @@ class Downloader:
         """
         with yt_dlp.YoutubeDL(opts) as ydl:
             try:
+                logger.info(f"🔄 Starting extraction for: {url}")
                 info = ydl.extract_info(url, download=True)
+                
+                if not info:
+                    return {"status": "error", "message": "Failed to extract video information"}
                 
                 if 'entries' in info:
                     info = info['entries'][0]
@@ -222,6 +251,10 @@ class Downloader:
                 if opts.get('postprocessors'):
                     base, _ = os.path.splitext(filename)
                     filename = f"{base}.m4a"
+
+                # ✅ Check if file actually exists
+                if not os.path.exists(filename):
+                    return {"status": "error", "message": "Download completed but file not found"}
 
                 return {
                     "status": "success",
@@ -233,11 +266,25 @@ class Downloader:
 
             except yt_dlp.utils.DownloadError as e:
                 error_msg = str(e)
-                if "File is larger than" in error_msg:
-                    return {"status": "error", "message": "File too large (>49MB)."}
-                return {"status": "error", "message": f"Download failed: {error_msg}"}
+                logger.error(f"❌ DownloadError: {error_msg}")
+                
+                # ✅ Better error categorization
+                if "File is larger than" in error_msg or "too large" in error_msg.lower():
+                    return {"status": "error", "message": "File too large (>49MB). Try a shorter video."}
+                elif "Video unavailable" in error_msg or "Private video" in error_msg:
+                    return {"status": "error", "message": "Video is unavailable or private"}
+                elif "Sign in to confirm your age" in error_msg:
+                    return {"status": "error", "message": "Age-restricted video. Please provide cookies.txt file."}
+                elif "HTTP Error 429" in error_msg or "Too Many Requests" in error_msg:
+                    return {"status": "error", "message": "Rate limited. Please try again in a few minutes."}
+                elif "unable to extract" in error_msg.lower():
+                    return {"status": "error", "message": "Failed to extract video. URL may be invalid."}
+                else:
+                    return {"status": "error", "message": f"Download failed: {error_msg[:200]}"}
+                    
             except Exception as e:
-                return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+                logger.error(f"❌ Unexpected error: {str(e)}", exc_info=True)
+                return {"status": "error", "message": f"Unexpected error: {str(e)[:200]}"}
 
     async def download(self, url: str, type: str = "video") -> Dict[str, Any]:
         """
@@ -250,12 +297,12 @@ class Downloader:
         Returns:
             Dictionary with status, file_path, and metadata.
         """
-        opts = self._get_opts(type, url)  # Pass URL for platform detection
+        opts = self._get_opts(type, url)
         loop = asyncio.get_running_loop()
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                logger.info(f"⬇️ Downloading ({type}) [Attempt {attempt}]: {url}")
+                logger.info(f"⬇️ Downloading ({type}) [Attempt {attempt}/{self.max_retries}]: {url}")
                 
                 # Run blocking code in thread pool
                 result = await loop.run_in_executor(
@@ -269,19 +316,31 @@ class Downloader:
                     logger.info(f"✅ Download complete: {result['file_path']}")
                     return result
                 
-                if "File too large" in result["message"]:
-                    logger.warning(f"⚠️ {result['message']}")
+                # ✅ Don't retry for these errors
+                non_retryable_errors = [
+                    "File too large",
+                    "unavailable or private",
+                    "Age-restricted",
+                    "invalid"
+                ]
+                
+                if any(err in result["message"] for err in non_retryable_errors):
+                    logger.warning(f"⚠️ Non-retryable error: {result['message']}")
                     return result
 
-                logger.warning(f"⚠️ Attempt {attempt} failed: {result['message']}")
+                logger.warning(f"⚠️ Attempt {attempt}/{self.max_retries} failed: {result['message']}")
 
             except Exception as e:
-                logger.error(f"❌ Critical error in download wrapper: {e}")
-                return {"status": "error", "message": "Internal server error."}
+                logger.error(f"❌ Critical error in download wrapper (attempt {attempt}): {e}", exc_info=True)
+                if attempt == self.max_retries:
+                    return {"status": "error", "message": "Internal server error. Please try again."}
             
+            # ✅ Exponential backoff
             if attempt < self.max_retries:
-                await asyncio.sleep(attempt)
+                sleep_time = min(2 ** attempt, 10)  # Max 10 seconds
+                logger.info(f"⏳ Waiting {sleep_time}s before retry...")
+                await asyncio.sleep(sleep_time)
 
-        return {"status": "error", "message": "Failed after 3 attempts. Please try again later."}
+        return {"status": "error", "message": f"Failed after {self.max_retries} attempts. Please try again later."}
 
 downloader = Downloader()
