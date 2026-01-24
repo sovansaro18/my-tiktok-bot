@@ -8,7 +8,6 @@ from src.config import LOG_CHANNEL_ID
 
 logger = logging.getLogger(__name__)
 
-
 def sanitize_markdown(text: str) -> str:
     """
     Sanitize text for Markdown to prevent injection.
