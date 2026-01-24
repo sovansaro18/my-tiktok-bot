@@ -16,9 +16,12 @@ COOKIES_FILE = os.getenv("COOKIES_FILE", "cookies.txt")
 
 class Downloader:
     """
-    Hybrid video/audio downloader.
-    - Uses Cobalt API for TikTok (better success rate)
-    - Uses yt-dlp for YouTube, Facebook, Instagram, Twitter
+    Hybrid video/audio downloader with multi-API fallback.
+    
+    Platform Priority:
+    - TikTok: Cobalt API → yt-dlp
+    - Facebook: SnapSave → SaveFrom → FbDownloader → yt-dlp
+    - Others: yt-dlp
     """
 
     USER_AGENT = (
@@ -54,6 +57,7 @@ class Downloader:
             self.shutdown(wait=False)
 
     def _detect_platform(self, url: str) -> str:
+        """Detect platform from URL."""
         url_lower = url.lower()
         
         if any(domain in url_lower for domain in ['youtube.com', 'youtu.be']):
@@ -70,6 +74,7 @@ class Downloader:
         return 'other'
 
     def _get_opts(self, download_type: str = "video", url: str = "") -> Dict[str, Any]:
+        """Get yt-dlp options based on platform and download type."""
         platform = self._detect_platform(url)
         logger.info(f"🔍 Platform: {platform}")
 
@@ -159,6 +164,7 @@ class Downloader:
         return common_opts
 
     def _download_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Synchronous yt-dlp download (runs in thread pool)."""
         with yt_dlp.YoutubeDL(opts) as ydl:
             try:
                 logger.info(f"🔄 Extracting info: {url}")
@@ -217,7 +223,7 @@ class Downloader:
                 return {"status": "error", "message": f"Error: {str(e)[:200]}"}
 
     async def download_with_ytdlp(self, url: str, type: str = "video") -> Dict[str, Any]:
-        """Download using yt-dlp (for non-TikTok platforms)."""
+        """Download using yt-dlp with retry logic."""
         opts = self._get_opts(type, url)
         loop = asyncio.get_running_loop()
 
@@ -258,28 +264,77 @@ class Downloader:
 
     async def download(self, url: str, type: str = "video") -> Dict[str, Any]:
         """
-        Main download function with platform detection.
-        - TikTok → Cobalt API
+        Main download function with intelligent platform routing.
+        
+        Routing:
+        - TikTok → Cobalt API (fallback: yt-dlp)
+        - Facebook → Facebook Multi-API (fallback: yt-dlp)
         - Others → yt-dlp
+        
+        Args:
+            url: Video URL
+            type: "video" or "audio"
+            
+        Returns:
+            Dictionary with status, file_path, and metadata
         """
+        
         platform = self._detect_platform(url)
         
-        # ✅ Use Cobalt API for TikTok
+        # ✅ Route 1: TikTok → Cobalt API
         if platform == 'tiktok':
-            logger.info("🎵 Using Cobalt API for TikTok")
+            logger.info("🎵 Routing to Cobalt API for TikTok")
             try:
-                # Import here to avoid circular dependency
                 from src.cobalt_api import cobalt_downloader
-                return await cobalt_downloader.download(url, type)
+                result = await cobalt_downloader.download(url, type)
+                
+                # If Cobalt succeeds, return immediately
+                if result["status"] == "success":
+                    return result
+                
+                # If Cobalt fails, fallback to yt-dlp
+                logger.warning("⚠️ Cobalt failed, falling back to yt-dlp...")
+                return await self.download_with_ytdlp(url, type)
+                
             except ImportError:
-                logger.error("❌ cobalt_api.py not found! Falling back to yt-dlp")
+                logger.error("❌ cobalt_api.py not found! Using yt-dlp")
                 return await self.download_with_ytdlp(url, type)
             except Exception as e:
                 logger.error(f"❌ Cobalt API error: {e}")
                 logger.info("⚠️ Falling back to yt-dlp...")
                 return await self.download_with_ytdlp(url, type)
         
-        # ✅ Use yt-dlp for other platforms
+        # ✅ Route 2: Facebook → Facebook Multi-API System
+        elif platform == 'facebook':
+            logger.info("📱 Routing to Facebook Multi-API System")
+            try:
+                from src.facebook_api import facebook_downloader
+                result = await facebook_downloader.download(url, type)
+                
+                # If any Facebook API succeeds, return immediately
+                if result["status"] == "success":
+                    logger.info("✅ Facebook API succeeded!")
+                    return result
+                
+                # If all Facebook APIs fail, fallback to yt-dlp as last resort
+                logger.warning("⚠️ All Facebook APIs failed, trying yt-dlp as last resort...")
+                ytdlp_result = await self.download_with_ytdlp(url, type)
+                
+                # If yt-dlp also fails, return the original Facebook API error (more detailed)
+                if ytdlp_result["status"] == "error":
+                    return result  # Return Facebook API error message
+                
+                return ytdlp_result
+                
+            except ImportError:
+                logger.error("❌ facebook_api.py not found! Using yt-dlp only")
+                return await self.download_with_ytdlp(url, type)
+            except Exception as e:
+                logger.error(f"❌ Facebook API error: {e}")
+                logger.info("⚠️ Falling back to yt-dlp...")
+                return await self.download_with_ytdlp(url, type)
+        
+        # ✅ Route 3: All other platforms → yt-dlp
         else:
             logger.info(f"📹 Using yt-dlp for {platform}")
             return await self.download_with_ytdlp(url, type)
