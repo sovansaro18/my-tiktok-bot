@@ -3,6 +3,7 @@ import logging
 from html import escape
 from typing import Optional
 from urllib.parse import urlparse
+from datetime import datetime
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
@@ -115,6 +116,143 @@ async def cmd_plan(message: Message):
         text += "✨ <i>You are a Premium member. Enjoy unlimited downloads!</i>"
         
     await message.answer(text, parse_mode="HTML")
+
+@router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message):
+    """Admin command to broadcast message to all users."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    # Get message text after /broadcast
+    text = message.text.replace("/broadcast", "", 1).strip()
+    
+    if not text:
+        await message.answer(
+            "⚠️ <b>Usage:</b> /broadcast [your message]\n\n"
+            "<b>Example:</b>\n"
+            "/broadcast 🔧 Bot will be under maintenance for 30 minutes.",
+            parse_mode="HTML"
+        )
+        return
+    
+    # Get all users from database
+    try:
+        # Get all users
+        all_users = await db.users.find({}).to_list(length=None)
+        
+        total = len(all_users)
+        success = 0
+        failed = 0
+        
+        # Show progress
+        progress_msg = await message.answer(
+            f"📢 <b>Broadcasting...</b>\n"
+            f"Total users: {total}\n"
+            f"Sent: 0\n"
+            f"Failed: 0",
+            parse_mode="HTML"
+        )
+        
+        # Send to each user
+        for idx, user in enumerate(all_users, 1):
+            user_id = user.get("user_id")
+            
+            try:
+                # Send message with admin badge
+                broadcast_text = (
+                    f"📢 <b>Announcement from Admin</b>\n\n"
+                    f"{text}\n\n"
+                    f"<i>This is an official message from the bot administrator.</i>"
+                )
+                
+                await message.bot.send_message(
+                    chat_id=user_id,
+                    text=broadcast_text,
+                    parse_mode="HTML"
+                )
+                success += 1
+                
+                # Avoid Telegram rate limits (30 messages/second)
+                if idx % 20 == 0:
+                    await asyncio.sleep(1)
+                
+                # Update progress every 10 users
+                if idx % 10 == 0 or idx == total:
+                    await progress_msg.edit_text(
+                        f"📢 <b>Broadcasting...</b>\n"
+                        f"Total users: {total}\n"
+                        f"✅ Sent: {success}\n"
+                        f"❌ Failed: {failed}\n"
+                        f"Progress: {idx}/{total} ({idx*100//total}%)",
+                        parse_mode="HTML"
+                    )
+                
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Failed to send to {user_id}: {e}")
+        
+        # Final report
+        await progress_msg.edit_text(
+            f"✅ <b>Broadcast Complete!</b>\n\n"
+            f"📊 Total users: {total}\n"
+            f"✅ Successfully sent: {success}\n"
+            f"❌ Failed: {failed}\n\n"
+            f"<i>Failed users may have blocked the bot.</i>",
+            parse_mode="HTML"
+        )
+        
+        # Log to channel
+        await send_log(
+            f"📢 Broadcast Sent\n"
+            f"By: Admin (`{ADMIN_ID}`)\n"
+            f"Success: {success}/{total}\n"
+            f"Message: {text[:100]}...",
+            bot=message.bot
+        )
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        await message.answer(
+            f"❌ <b>Broadcast Failed</b>\n\n"
+            f"Error: {escape(str(e))}",
+            parse_mode="HTML"
+        )
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message):
+    """Admin command to view bot statistics."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        stats = await db.count_users()
+        
+        # Calculate total downloads
+        pipeline = [
+            {"$group": {
+                "_id": None,
+                "total_downloads": {"$sum": "$downloads_count"}
+            }}
+        ]
+        
+        result = await db.users.aggregate(pipeline).to_list(length=1)
+        total_downloads = result[0]["total_downloads"] if result else 0
+        
+        text = (
+            f"📊 <b>Bot Statistics</b>\n\n"
+            f"👥 Total Users: <b>{stats['total']}</b>\n"
+            f"💎 Premium Users: <b>{stats['premium']}</b>\n"
+            f"🆓 Free Users: <b>{stats['free']}</b>\n\n"
+            f"⬇️ Total Downloads: <b>{total_downloads}</b>\n"
+            f"📈 Avg per user: <b>{total_downloads // stats['total'] if stats['total'] > 0 else 0}</b>\n\n"
+            f"<i>Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+        )
+        
+        await message.answer(text, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Stats error: {e}")
+        await message.answer(f"❌ Error: {escape(str(e))}", parse_mode="HTML")
 
 @router.message(Command("approve"))
 async def cmd_approve(message: Message):
@@ -271,14 +409,8 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         if user_data.get("status") == "free":
             await db.increment_download(user_id)
         
-        # ✅ FIX: Send success notification to admin
-        await send_log(
-            f"✅ Download Success\n"
-            f"User: {callback.from_user.full_name} (`{user_id}`)\n"
-            f"Title: {safe_title}\n"
-            f"Type: {download_type}",
-            bot=callback.bot
-        )
+        # ✅ Don't spam admin with success messages
+        # Only log errors, not successes
             
         await callback.message.delete()
         
