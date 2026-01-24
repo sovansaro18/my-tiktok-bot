@@ -1,5 +1,9 @@
-import os
+import asyncio
 import logging
+from html import escape
+from typing import Optional
+from urllib.parse import urlparse
+
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import CommandStart, Command
@@ -9,10 +13,58 @@ from aiogram.fsm.state import State, StatesGroup
 from src.config import ADMIN_ID, LOG_CHANNEL_ID
 from src.database import db
 from src.downloader import downloader
-from src.utils import send_log
+from src.utils import send_log, safe_remove_file
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+# ====== Security: URL Validation ======
+ALLOWED_DOMAINS = [
+    'youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com',
+    'tiktok.com', 'www.tiktok.com', 'vm.tiktok.com',
+    'facebook.com', 'www.facebook.com', 'fb.watch', 'm.facebook.com',
+    'instagram.com', 'www.instagram.com',
+    'twitter.com', 'www.twitter.com', 'x.com', 'www.x.com',
+]
+
+MAX_URL_LENGTH = 2048
+DOWNLOAD_TIMEOUT = 300  # 5 minutes
+
+
+def validate_url(url: str) -> tuple[bool, Optional[str]]:
+    """
+    Validate URL for security.
+    
+    Returns:
+        (is_valid, error_message)
+    """
+    if not url:
+        return False, "URL is empty"
+    
+    if len(url) > MAX_URL_LENGTH:
+        return False, f"URL too long (max {MAX_URL_LENGTH} characters)"
+    
+    try:
+        parsed = urlparse(url)
+        
+        # Check scheme
+        if parsed.scheme not in ['http', 'https']:
+            return False, "Only HTTP/HTTPS URLs are allowed"
+        
+        # Check for localhost/internal IPs (SSRF protection)
+        netloc_lower = parsed.netloc.lower()
+        if any(blocked in netloc_lower for blocked in ['localhost', '127.0.0.1', '0.0.0.0', '::1', '192.168.', '10.', '172.16.']):
+            return False, "Internal URLs are not allowed"
+        
+        # Check domain whitelist
+        if not any(domain in netloc_lower for domain in ALLOWED_DOMAINS):
+            return False, "Platform not supported. Supported: YouTube, TikTok, Facebook, Instagram, Twitter/X"
+        
+        return True, None
+        
+    except Exception as e:
+        logger.warning(f"URL validation error: {e}")
+        return False, "Invalid URL format"
 
 class DownloadState(StatesGroup):
     waiting_for_format = State()
@@ -66,7 +118,8 @@ async def cmd_plan(message: Message):
 
 @router.message(Command("approve"))
 async def cmd_approve(message: Message):
-    if str(message.from_user.id) != str(ADMIN_ID):
+    # Security: Use integer comparison for admin check
+    if message.from_user.id != ADMIN_ID:
         return
 
     try:
@@ -105,6 +158,16 @@ async def handle_link(message: Message, state: FSMContext):
         return
 
     url = message.text.strip()
+    
+    # Security: Validate URL before processing
+    is_valid, error_msg = validate_url(url)
+    if not is_valid:
+        await message.answer(
+            f"⚠️ <b>Invalid URL</b>\n\n{escape(error_msg or 'Unknown error')}",
+            parse_mode="HTML"
+        )
+        return
+    
     await state.update_data(url=url)
     await state.set_state(DownloadState.waiting_for_format)
     
@@ -121,6 +184,7 @@ async def handle_link(message: Message, state: FSMContext):
 async def process_download_callback(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     url = data.get("url")
+    file_path = None
     
     if not url:
         await callback.message.edit_text("⚠️ Session expired. Please send the link again.")
@@ -128,20 +192,45 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
 
     download_type = "audio" if callback.data == "fmt_audio" else "video"
     
-    await callback.message.edit_text(f"⏳ <b>Downloading {download_type.upper()}...</b>\n<i>Please wait, this may take a moment.</i>", parse_mode="HTML")
+    await callback.message.edit_text(
+        f"⏳ <b>Downloading {download_type.upper()}...</b>\n"
+        f"<i>Please wait, this may take a moment.</i>",
+        parse_mode="HTML"
+    )
     
-    result = await downloader.download(url, type=download_type)
+    try:
+        # Security: Add timeout for downloads
+        result = await asyncio.wait_for(
+            downloader.download(url, type=download_type),
+            timeout=DOWNLOAD_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"Download timeout for URL: {url}")
+        await callback.message.edit_text(
+            "❌ <b>Download Timeout</b>\n\n"
+            "The download took too long. Please try again with a shorter video.",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
     
     if result["status"] == "error":
-        await callback.message.edit_text(f"❌ <b>Error:</b> {result['message']}", parse_mode="HTML")
+        # Security: Escape error message to prevent XSS
+        safe_message = escape(result.get('message', 'Unknown error'))
+        await callback.message.edit_text(f"❌ <b>Error:</b> {safe_message}", parse_mode="HTML")
         await state.clear()
         return
 
     file_path = result["file_path"]
+    
+    # Security: Escape title and other user-controllable data (XSS prevention)
+    safe_title = escape(str(result.get('title', 'Unknown')))
+    safe_duration = escape(str(result.get('duration', 0)))
+    
     caption = (
         f"✅ <b>Downloaded Successfully!</b>\n"
-        f"📌 Title: {result.get('title')}\n"
-        f"⏱ Duration: {result.get('duration')}s\n"
+        f"📌 Title: {safe_title}\n"
+        f"⏱ Duration: {safe_duration}s\n"
         f"🤖 via @ravi_downloader_bot"
     )
 
@@ -167,19 +256,22 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Upload failed: {e}")
         await callback.message.edit_text("❌ Failed to upload file. It might be too large for Telegram.")
     finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        # Security: Use async file removal to avoid blocking event loop
+        if file_path:
+            await safe_remove_file(file_path)
         await state.clear()
 
 @router.message(F.photo)
 async def handle_receipt(message: Message):
-    caption = message.caption or "No caption"
-    user_info = f"User: {message.from_user.full_name} (`{message.from_user.id}`)"
+    # Security: Escape user-provided caption to prevent XSS
+    caption = escape(message.caption or "No caption")
+    user_name = escape(message.from_user.full_name)
+    user_info = f"User: {user_name} (<code>{message.from_user.id}</code>)"
     
     await message.bot.send_photo(
         chat_id=LOG_CHANNEL_ID,
         photo=message.photo[-1].file_id,
-        caption=f"🧾 <b>Payment Receipt Received</b>\n\n{user_info}\n📝 Note: {caption}\n\n👉 Use `/approve {message.from_user.id}` to confirm.",
+        caption=f"🧾 <b>Payment Receipt Received</b>\n\n{user_info}\n📝 Note: {caption}\n\n👉 Use <code>/approve {message.from_user.id}</code> to confirm.",
         parse_mode="HTML"
     )
     

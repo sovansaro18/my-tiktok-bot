@@ -51,6 +51,25 @@ class Downloader:
         """
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.max_retries = 3
+        self._shutdown = False
+
+    def shutdown(self, wait: bool = True) -> None:
+        """
+        Shutdown the thread pool executor.
+        
+        Args:
+            wait: If True, wait for all pending tasks to complete.
+        """
+        if not self._shutdown:
+            logger.info("🔒 Shutting down downloader thread pool...")
+            self.executor.shutdown(wait=wait)
+            self._shutdown = True
+            logger.info("✅ Downloader thread pool shut down.")
+
+    def __del__(self):
+        """Cleanup on garbage collection."""
+        if not self._shutdown:
+            self.shutdown(wait=False)
 
     def _detect_platform(self, url: str) -> str:
         """

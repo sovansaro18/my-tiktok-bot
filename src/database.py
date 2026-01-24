@@ -47,8 +47,8 @@ class Database:
 
         except PyMongoError as e:
             logger.error(f"⚠️ Database error in get_user: {e}")
-            # Return a safe default to prevent bot crash
-            return {"user_id": user_id, "status": "free", "downloads_count": 10}, False
+            # Security: Return downloads_count: 0 to prevent unlimited downloads on DB error
+            return {"user_id": user_id, "status": "free", "downloads_count": 0}, False
 
     async def increment_download(self, user_id: int) -> bool:
         """
@@ -99,9 +99,12 @@ class Database:
             return {"total": 0, "premium": 0, "free": 0}
 
     async def close(self):
-        """Close the database connection."""
-        self.client.close()
-        logger.info("🔒 MongoDB connection closed.")
+        """Close the database connection properly."""
+        # Note: Motor's close() is synchronous but safe to call
+        # We call it in an async context for consistency
+        if self.client:
+            self.client.close()
+            logger.info("🔒 MongoDB connection closed.")
 
 # Create a global instance
 try:
