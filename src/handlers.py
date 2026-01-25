@@ -11,6 +11,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 
 from src.config import ADMIN_ID, LOG_CHANNEL_ID
 from src.database import db
@@ -31,6 +32,7 @@ ALLOWED_DOMAINS = [
 
 MAX_URL_LENGTH = 2048
 DOWNLOAD_TIMEOUT = 300  # 5 minutes
+MAX_FILE_SIZE = 49 * 1024 * 1024  # 49MB for Telegram
 
 
 def validate_url(url: str) -> tuple[bool, Optional[str]]:
@@ -61,6 +63,33 @@ def validate_url(url: str) -> tuple[bool, Optional[str]]:
         return False, "Invalid URL format"
 
 
+async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
+    """
+    Safely delete a message without raising exceptions.
+    
+    Returns:
+        True if deleted successfully or message doesn't exist
+        False if deletion failed due to other errors
+    """
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info(f"✅ Deleted message {message_id}")
+        return True
+    except TelegramBadRequest as e:
+        if "message to delete not found" in str(e).lower():
+            logger.info(f"ℹ️ Message {message_id} already deleted or not found")
+            return True  # Consider it success since message is gone
+        elif "message can't be deleted" in str(e).lower():
+            logger.warning(f"⚠️ Cannot delete message {message_id} (too old or permission issue)")
+            return False
+        else:
+            logger.error(f"❌ Error deleting message {message_id}: {e}")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Unexpected error deleting message {message_id}: {e}")
+        return False
+
+
 def get_usage_notification(downloads_count: int, status: str) -> dict:
     """
     Generate usage notification message with premium promotion.
@@ -68,9 +97,6 @@ def get_usage_notification(downloads_count: int, status: str) -> dict:
     Returns: dict with 'text' and 'keyboard'
     """
     remaining = max(0, 10 - downloads_count)
-    
-    # Get premium stats for slot info
-    # Note: This is synchronous, we'll need to make it async in actual use
     
     if status == "premium":
         return {
@@ -334,7 +360,7 @@ async def cmd_broadcast_promo(message: Message):
         # Get premium users count to calculate remaining slots
         stats = await db.count_users()
         premium_sold = stats['premium']
-        slots_remaining = max(0, 15 - premium_sold)  # 15 slots total
+        slots_remaining = max(0, 15 - premium_sold)
         
         # Don't send if all slots are sold
         if slots_remaining == 0:
@@ -384,7 +410,7 @@ async def cmd_broadcast_promo(message: Message):
             "✅ Ad-free experience\n"
             "✅ Early access to new features\n\n"
             "💰 <b>Pay once, use forever!</b>\n"
-            "⏰ <b>Hurry! Only {slots_remaining} lifetime slots left!</b>\n\n"
+            f"⏰ <b>Hurry! Only {slots_remaining} lifetime slots left!</b>\n\n"
             "<i>This is a one-time payment. No recurring fees! 🚀</i>"
         )
         
@@ -585,7 +611,7 @@ async def handle_premium_info(callback: CallbackQuery):
         "✨ Lifetime access (no expiration)\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "💵 <b>One-Time Payment:</b>\n"
-        "• Pay <b>${1.99:.2f}</b> once\n"
+        f"• Pay <b>${1.99:.2f}</b> once\n"
         "• Use forever\n"
         "• No monthly fees\n"
         "• No hidden charges\n\n"
@@ -722,7 +748,7 @@ async def handle_link(message: Message, state: FSMContext):
         )
         return
     
-    # ✅ NEW: Store the URL message ID for later deletion
+    # Store URL and message IDs for cleanup
     await state.update_data(url=url, url_message_id=message.message_id)
     await state.set_state(DownloadState.waiting_for_format)
     
@@ -734,8 +760,6 @@ async def handle_link(message: Message, state: FSMContext):
     ])
     
     format_msg = await message.answer("👇 ជ្រើសរើសប្រភេទទាញយក:", reply_markup=keyboard)
-    
-    # ✅ NEW: Store format message ID for deletion
     await state.update_data(format_message_id=format_msg.message_id)
 
 
@@ -771,7 +795,6 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             "សូមព្យាយាមម្តងទៀតជាមួយ video ខ្លីជាងនេះ។",
             parse_mode="HTML"
         )
-        
         await send_log(
             f"⏱ Download Timeout\n"
             f"User: `{callback.from_user.id}`\n"
@@ -779,7 +802,6 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             f"Type: {download_type}",
             bot=callback.bot
         )
-        
         await state.clear()
         return
     
@@ -795,11 +817,25 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             f"Error: {result.get('message', 'Unknown')}",
             bot=callback.bot
         )
-        
         await state.clear()
         return
 
     file_path = result["file_path"]
+    
+    # ✅ Check file size before uploading
+    if os.path.exists(file_path):
+        file_size = os.path.getsize(file_path)
+        if file_size > MAX_FILE_SIZE:
+            await progress_msg.edit_text(
+                f"❌ <b>File ធំពេកសម្រាប់ Telegram</b>\n\n"
+                f"📊 ទំហំ: {file_size / 1024 / 1024:.1f}MB\n"
+                f"⚠️ កំណត់: {MAX_FILE_SIZE / 1024 / 1024:.0f}MB\n\n"
+                f"សូមព្យាយាម video គុណភាពទាបជាង ឬ audio only។",
+                parse_mode="HTML"
+            )
+            await safe_remove_file(file_path)
+            await state.clear()
+            return
     
     safe_title = escape(str(result.get('title', 'Unknown')))
     safe_duration = escape(str(result.get('duration', 0)))
@@ -821,38 +857,31 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         else:
             await callback.message.answer_video(file_input, caption=caption, parse_mode="HTML")
         
-        # ✅ NEW: Delete URL message and format selection message
-        try:
-            if url_message_id:
-                await callback.bot.delete_message(
-                    chat_id=callback.message.chat.id,
-                    message_id=url_message_id
-                )
-                logger.info(f"Deleted URL message {url_message_id}")
-        except Exception as e:
-            logger.warning(f"Could not delete URL message: {e}")
+        # ✅ Safe cleanup of messages
+        chat_id = callback.message.chat.id
         
-        try:
-            if format_message_id:
-                await callback.bot.delete_message(
-                    chat_id=callback.message.chat.id,
-                    message_id=format_message_id
-                )
-                logger.info(f"Deleted format message {format_message_id}")
-        except Exception as e:
-            logger.warning(f"Could not delete format message: {e}")
+        # Delete URL message
+        if url_message_id:
+            await safe_delete_message(callback.bot, chat_id, url_message_id)
+        
+        # Delete format selection message
+        if format_message_id:
+            await safe_delete_message(callback.bot, chat_id, format_message_id)
         
         # Delete progress message
-        await progress_msg.delete()
+        try:
+            await progress_msg.delete()
+        except Exception as e:
+            logger.warning(f"Could not delete progress message: {e}")
         
-        # Update stats for free users
+        # Update stats and show notification
         user_id = callback.from_user.id
         user_data, _ = await db.get_user(user_id)
         
         if user_data.get("status") == "free":
             await db.increment_download(user_id)
             
-            # ✅ NEW: Get updated user data and show usage notification
+            # Get updated user data and show usage notification
             updated_user_data, _ = await db.get_user(user_id)
             downloads_count = updated_user_data.get("downloads_count", 0)
             status = updated_user_data.get("status", "free")
@@ -872,19 +901,47 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
                 parse_mode="HTML"
             )
             
+    except TelegramBadRequest as e:
+        logger.error(f"Telegram API error during upload: {e}")
+        
+        # Check specific error types
+        error_str = str(e).lower()
+        if "file is too big" in error_str or "too large" in error_str:
+            error_msg = (
+                "❌ <b>File ធំពេកសម្រាប់ Telegram</b>\n\n"
+                "⚠️ Telegram កំណត់: 50MB\n"
+                "សូមព្យាយាម video គុណភាពទាបជាង ឬ audio only។"
+            )
+        elif "wrong file identifier" in error_str:
+            error_msg = "❌ មានបញ្ហាជាមួយ file format។ សូមព្យាយាមម្តងទៀត។"
+        else:
+            error_msg = f"❌ មិនអាចបញ្ជូន file បានទេ។\n\n<code>{escape(str(e)[:200])}</code>"
+        
+        await callback.message.answer(error_msg, parse_mode="HTML")
+        
+        await send_log(
+            f"❌ Upload Error (Telegram)\n"
+            f"User: `{callback.from_user.id}`\n"
+            f"Error: {str(e)[:200]}",
+            bot=callback.bot
+        )
+        
     except Exception as e:
-        logger.error(f"Upload failed: {e}")
+        logger.error(f"Upload failed: {e}", exc_info=True)
         await callback.message.answer(
-            "❌ មិនអាចបញ្ជូន file បានទេ។ វាអាចធំពេក។"
+            f"❌ មានបញ្ហាក្នុងការបញ្ជូន file។\n\n"
+            f"<code>{escape(str(e)[:200])}</code>",
+            parse_mode="HTML"
         )
         
         await send_log(
-            f"❌ Upload Error\n"
+            f"❌ Upload Error (General)\n"
             f"User: `{callback.from_user.id}`\n"
-            f"Error: {str(e)}",
+            f"Error: {str(e)[:200]}",
             bot=callback.bot
         )
     finally:
+        # Always cleanup file
         if file_path:
             await safe_remove_file(file_path)
         await state.clear()
@@ -908,7 +965,3 @@ async def handle_receipt(message: Message):
         "យើងនឹងពិនិត្យហើយ upgrade គណនីរបស់អ្នកក្នុងពេលឆាប់ៗ។",
         parse_mode="HTML"
     )
-
-
-# ✅ Keep all other handlers: /broadcast, /broadcast_promo, /stats, /approve
-# (Copy from your original file - they remain unchanged)
