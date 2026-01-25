@@ -104,7 +104,7 @@ def get_usage_notification(downloads_count: int, status: str) -> dict:
                 "✅ <b>ទាញយករួចរាល់!</b>\n\n"
                 "💎 <b>Premium Member</b>\n"
                 "♾️ ប្រើបានមិនកំណត់\n\n"
-                "<i>អរគុណសម្រាប់ការជឿទុកចិត្ត!</i>"
+                "<i>អរគុណសម្រាប់ការប្រើប្រាស់❤️!</i>"
             ),
             "keyboard": None
         }
