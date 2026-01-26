@@ -31,6 +31,25 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
+def premium_buy_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"💳 ទិញ Premium ${PREMIUM_PRICE:.2f}",
+                    callback_data="buy_premium",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"ℹ️ ព័ត៌មាន Premium (${PREMIUM_PRICE:.2f})",
+                    callback_data="premium_info",
+                )
+            ],
+        ]
+    )
+
+
 async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
     """Safely delete a message without raising exceptions."""
     try:
@@ -52,7 +71,7 @@ async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
         return False
 
 
-def check_daily_limit(user_data: dict) -> tuple[bool, str]:
+def check_daily_limit(user_data: dict) -> tuple[bool, str, InlineKeyboardMarkup | None]:
     """
     Check if user has exceeded daily download limit.
     
@@ -63,7 +82,7 @@ def check_daily_limit(user_data: dict) -> tuple[bool, str]:
     
     # Premium users: unlimited
     if status == "premium":
-        return True, ""
+        return True, "", None
     
     # After trial: check daily limit
     last_download_date = user_data.get("last_download_date")
@@ -73,7 +92,7 @@ def check_daily_limit(user_data: dict) -> tuple[bool, str]:
     
     # Reset counter if new day
     if not last_download_date or last_download_date.date() != today:
-        return True, ""
+        return True, "", None
     
     # Check if exceeded daily limit
     if daily_count >= FREE_DAILY_LIMIT:
@@ -83,10 +102,10 @@ def check_daily_limit(user_data: dict) -> tuple[bool, str]:
             f"⏰ សូមព្យាយាមម្តងទៀតនៅថ្ងៃស្អែក\n\n"
             f"💎 <b>ចង់ប្រើមិនកំណត់?</b>\n"
             f"Upgrade ទៅ Premium តម្លៃ <b>${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)"
-        )
+        ), premium_buy_keyboard()
     
     remaining = FREE_DAILY_LIMIT - daily_count
-    return True, f"📊 នៅសល់: {remaining}/{FREE_DAILY_LIMIT} ដងសម្រាប់ថ្ងៃនេះ"
+    return True, f"📊 នៅសល់: {remaining}/{FREE_DAILY_LIMIT} ដងសម្រាប់ថ្ងៃនេះ", None
 
 
 def get_usage_notification(user_data: dict) -> dict:
@@ -130,12 +149,22 @@ def get_usage_notification(user_data: dict) -> dict:
         "• ល្បឿនលឿន 🚀\n"
         f"• តម្លៃ: <b>${PREMIUM_PRICE:.2f}</b>"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"💎 Premium ${PREMIUM_PRICE:.2f}",
-            callback_data="premium_info",
-        )]
-    ])
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"💳 ទិញ Premium ${PREMIUM_PRICE:.2f}",
+                    callback_data="buy_premium",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"ℹ️ ព័ត៌មាន Premium (${PREMIUM_PRICE:.2f})",
+                    callback_data="premium_info",
+                )
+            ],
+        ]
+    )
     
     return {"text": text, "keyboard": keyboard}
 
@@ -168,8 +197,7 @@ async def cmd_start(message: Message, state: FSMContext):
     
     # Bot capabilities
     welcome += (
-        "🤖 <b>ខ្ញុំគឺជាបតសម្រាប់ទាញយកវីដេអូ</b>\n"
-        "🤖 <b>អ្វីដែលខ្ញុំអាចធ្វើបាន៖</b>\n"
+        "🤖 <b>អ្វីដែលបតអាចធ្វើបាន:</b>\n"
         "✅ ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
         "✅ គាំទ្រ: TikTok, Facebook, YouTube Shorts, Instagram, Pinterest\n"
         "✅ ទាញយកជា Video ឬ Audio\n"
@@ -179,7 +207,7 @@ async def cmd_start(message: Message, state: FSMContext):
         "❌ មិនគាំទ្រវីដេអូ Private\n"
         "❌ មិនគាំទ្រវីដេអូដែលមាន Copyright\n"
         "❌ ទំហំវីដេអូត្រូវតូចជាង 49MB\n"
-        "❌ មិនគាំទ្រវីដេអូដែលមានការពារ (Private)\n\n"
+        "❌ ត្រឹមតែវីដេអូ Public ប៉ុណ្ណោះ\n\n"
     )
     
     # Show status based on user type
@@ -212,7 +240,10 @@ async def cmd_start(message: Message, state: FSMContext):
             "<i>ផ្ញើ link មកខ្ញុំ ហើយជ្រើស Video/Audio ដើម្បីទាញយក</i>"
         )
 
-    await message.answer(welcome, parse_mode="HTML")
+    if status == "premium":
+        await message.answer(welcome, parse_mode="HTML")
+    else:
+        await message.answer(welcome, parse_mode="HTML", reply_markup=premium_buy_keyboard())
 
 
 @router.message(Command("plan"))
@@ -256,14 +287,17 @@ async def cmd_plan(message: Message, state: FSMContext):
             f"• តម្លៃ: <b>${PREMIUM_PRICE:.2f}</b>"
         )
         
-    await message.answer(text, parse_mode="HTML")
+    if status == "premium":
+        await message.answer(text, parse_mode="HTML")
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=premium_buy_keyboard())
 
 
 @router.message(Command("report"))
 async def cmd_report(message: Message, state: FSMContext):
     await state.set_state(ReportState.waiting_for_report)
     await message.answer(
-        "📩 <b>សូមវាយសារជូនដំណឹង!</b>\n\nសរសេរសាររបស់អ្នកនៅទីនេះ!",
+        "📩 <b>សូមវាយសារជូនដំណឹង!</b>\n\nសរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ។",
         parse_mode="HTML",
     )
 
@@ -318,10 +352,10 @@ async def handle_link(message: Message, state: FSMContext):
     user_data, _ = await db.get_user(user_id)
     
     # Check daily limit for free users
-    can_download, limit_msg = check_daily_limit(user_data)
+    can_download, limit_msg, limit_kb = check_daily_limit(user_data)
     
     if not can_download:
-        await message.answer(limit_msg, parse_mode="HTML")
+        await message.answer(limit_msg, parse_mode="HTML", reply_markup=limit_kb)
         return
 
     raw_url = message.text.strip()
@@ -546,6 +580,35 @@ async def cmd_broadcast(message: Message):
             parse_mode="HTML"
         )
         return
+
+    # Validate HTML before broadcasting.
+    # If HTML is invalid, do not send a fallback with raw tags to users.
+    preview_text = (
+        f"📢 <b>សេចក្តីជូនដំណឹងពីអ្នកគ្រប់គ្រង</b>\n\n"
+        f"{text}\n\n"
+        f"<i>នេះជាសារផ្លូវការពីអ្នកគ្រប់គ្រងបត។</i>"
+    )
+    try:
+        preview = await message.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=preview_text,
+            parse_mode="HTML",
+            disable_notification=True,
+        )
+        # Clean up preview to avoid cluttering admin chat
+        try:
+            await message.bot.delete_message(chat_id=ADMIN_ID, message_id=preview.message_id)
+        except Exception:
+            pass
+    except TelegramBadRequest as te:
+        if "can't parse entities" in str(te).lower():
+            await message.answer(
+                "❌ <b>Tag HTML មិនត្រឹមត្រូវ</b>\n\n"
+                "សូមពិនិត្យ <b>&lt;b&gt;...&lt;/b&gt;</b>, <b>&lt;i&gt;...&lt;/i&gt;</b> ឲ្យបិទ tag ត្រឹមត្រូវ។",
+                parse_mode="HTML",
+            )
+            return
+        raise
     
     try:
         all_users = await db.list_users()
@@ -565,16 +628,10 @@ async def cmd_broadcast(message: Message):
             user_id = user.get("user_id")
             
             try:
-                broadcast_text = (
-                    f"📢 <b>សេចក្តីជូនដំណឹងពីអ្នកគ្រប់គ្រង</b>\n\n"
-                    f"{text}\n\n"
-                    f"<i>នេះជាសារផ្លូវការពីអ្នកគ្រប់គ្រងបត។<b>RAVI</b></i>"
-                )
-                
                 await message.bot.send_message(
                     chat_id=user_id,
-                    text=broadcast_text,
-                    parse_mode="HTML"
+                    text=preview_text,
+                    parse_mode="HTML",
                 )
                 success += 1
                 

@@ -1,5 +1,7 @@
 aiogram==3.4.1
-yt-dlp
+# Pin to a recent nightly/dev build to keep up with frequent YouTube changes
+# (Render uses pip; exact version ensures pre-release is installed)
+yt-dlp[default]==2026.1.25.233128.dev0
 motor==3.5.1
 pymongo==4.8.0
 python-dotenv==1.0.1
