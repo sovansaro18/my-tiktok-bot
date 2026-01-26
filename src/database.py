@@ -12,7 +12,7 @@ class Database:
     def __init__(self, uri: str):
         """
         Initialize MongoDB connection with Motor (Async).
-        Motor handles connection pooling automatically.
+       
         """
         try:
             self.client = AsyncIOMotorClient(uri)
@@ -25,7 +25,7 @@ class Database:
 
     async def get_user(self, user_id: int) -> Tuple[Dict[str, Any], bool]:
         """
-        Get user data. If user doesn't exist, create a new one.
+        ស្វែងរកទិន្នន័យអ្នកប្រើប្រាស់។ ប្រសិនបើគ្មាន នឹងបង្កើតថ្មីភ្លាមៗ។
         Returns: (user_data, is_new_user)
         """
         try:
@@ -34,31 +34,45 @@ class Database:
             if user:
                 return user, False
             
-            # Create new user structure
+            # រចនាសម្ព័ន្ធទិន្នន័យសម្រាប់អ្នកប្រើថ្មី
             new_user = {
                 "user_id": user_id,
                 "status": "free",
                 "downloads_count": 0,
-                "joined_date": datetime.now(timezone.utc)
+                "last_download_date": datetime.now(timezone.utc),
+                "joined_at": datetime.now(timezone.utc)
             }
             await self.users.insert_one(new_user)
-            logger.info(f"🆕 New user created: {user_id}")
             return new_user, True
-
         except PyMongoError as e:
-            logger.error(f"⚠️ Database error in get_user: {e}")
-            # Security: Return downloads_count: 0 to prevent unlimited downloads on DB error
-            return {"user_id": user_id, "status": "free", "downloads_count": 0}, False
+            logger.error(f"⚠️ Error in get_user: {e}")
+            return {}, False
 
     async def increment_download(self, user_id: int) -> bool:
         """
-        Increment download count for a user.
-        Returns: True if successful.
+        បូកចំនួនទាញយក និង Reset ជាស្វ័យប្រវត្តិប្រសិនបើឆ្លងដល់ថ្ងៃថ្មី។
+        នេះជាបច្ចេកទេស Atomic Update ដើម្បីការពារ Data Inconsistency។
         """
         try:
+            now = datetime.now(timezone.utc)
+            # កំណត់ម៉ោង 00:00:00 នៃថ្ងៃនេះសម្រាប់ផ្ទៀងផ្ទាត់ការ Reset ប្រចាំថ្ងៃ
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
             await self.users.update_one(
                 {"user_id": user_id},
-                {"$inc": {"downloads_count": 1}}
+                [
+                    {"$set": {
+                        "downloads_count": {
+                            "$cond": {
+                                # បើកាលបរិច្ឆេទចុងក្រោយតូចជាងថ្ងៃនេះ (ឆ្លងថ្ងៃថ្មី) ឱ្យរាប់ពី 1 វិញ
+                                "if": {"$lt": ["$last_download_date", today_start]},
+                                "then": 1,
+                                "else": {"$add": ["$downloads_count", 1]}
+                            }
+                        },
+                        "last_download_date": now
+                    }}
+                ]
             )
             return True
         except PyMongoError as e:
@@ -67,7 +81,7 @@ class Database:
 
     async def set_premium(self, user_id: int) -> bool:
         """
-        Upgrade a user to premium status.
+        តម្លើងឋានៈអ្នកប្រើប្រាស់ទៅជា PREMIUM។
         """
         try:
             result = await self.users.update_one(
@@ -84,7 +98,7 @@ class Database:
 
     async def count_users(self) -> Dict[str, int]:
         """
-        Get statistics about users.
+        ទាញយកស្ថិតិអ្នកប្រើប្រាស់សរុប។
         """
         try:
             total_users = await self.users.count_documents({})
@@ -99,16 +113,13 @@ class Database:
             return {"total": 0, "premium": 0, "free": 0}
 
     async def close(self):
-        """Close the database connection properly."""
-        # Note: Motor's close() is synchronous but safe to call
-        # We call it in an async context for consistency
+        """បិទការភ្ជាប់ទៅកាន់ Database។"""
         if self.client:
             self.client.close()
             logger.info("🔒 MongoDB connection closed.")
 
-# Create a global instance
+# បង្កើត Instance សម្រាប់ប្រើប្រាស់ជាសកល
 try:
     db = Database(MONGO_URI)
 except Exception:
-    # Handle case where config might be missing during initial setup
     db = None
