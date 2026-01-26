@@ -4,7 +4,7 @@ import os
 from html import escape
 from typing import Optional
 from urllib.parse import urlparse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
@@ -23,20 +23,25 @@ logger = logging.getLogger(__name__)
 
 # ====== Security: URL Validation ======
 ALLOWED_DOMAINS = [
-    'youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com',
-    'tiktok.com', 'www.tiktok.com', 'vm.tiktok.com',
-    'facebook.com', 'www.facebook.com', 'fb.watch', 'm.facebook.com',
-    'instagram.com', 'www.instagram.com',
-    'twitter.com', 'www.twitter.com', 'x.com', 'www.x.com',
+    'youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com',  # YouTube Shorts
+    'tiktok.com', 'www.tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com',  # TikTok
+    'facebook.com', 'www.facebook.com', 'fb.watch', 'm.facebook.com',  # Facebook
+    'instagram.com', 'www.instagram.com',  # Instagram
+    'pinterest.com', 'www.pinterest.com', 'pin.it',  # Pinterest
 ]
 
 MAX_URL_LENGTH = 2048
 DOWNLOAD_TIMEOUT = 300  # 5 minutes
 MAX_FILE_SIZE = 49 * 1024 * 1024  # 49MB for Telegram
 
+# Free user limits
+FREE_TRIAL_DAYS = 7  # First week unlimited
+FREE_DAILY_LIMIT = 2  # After trial: 2 downloads/day
+FREE_MAX_QUALITY = "480p"  # Max quality for free users
+
 
 def validate_url(url: str) -> tuple[bool, Optional[str]]:
-    """Validate URL for security."""
+    """Validate URL for security and supported platforms."""
     if not url:
         return False, "URL is empty"
     
@@ -50,27 +55,32 @@ def validate_url(url: str) -> tuple[bool, Optional[str]]:
             return False, "Only HTTP/HTTPS URLs are allowed"
         
         netloc_lower = parsed.netloc.lower()
+        
+        # Block internal URLs
         if any(blocked in netloc_lower for blocked in ['localhost', '127.0.0.1', '0.0.0.0', '::1', '192.168.', '10.', '172.16.']):
             return False, "Internal URLs are not allowed"
         
+        # Check supported platforms
         if not any(domain in netloc_lower for domain in ALLOWED_DOMAINS):
-            return False, "Platform not supported. Supported: YouTube, TikTok, Facebook, Instagram, Twitter/X"
+            return False, (
+                "វេទិកានេះមិនត្រូវបានគាំទ្រទេ។\n\n"
+                "វេទិកាដែលគាំទ្រ:\n"
+                "• TikTok\n"
+                "• Facebook\n"
+                "• YouTube Shorts\n"
+                "• Instagram\n"
+                "• Pinterest"
+            )
         
         return True, None
         
     except Exception as e:
         logger.warning(f"URL validation error: {e}")
-        return False, "Invalid URL format"
+        return False, "ទម្រង់ URL មិនត្រឹមត្រូវ"
 
 
 async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
-    """
-    Safely delete a message without raising exceptions.
-    
-    Returns:
-        True if deleted successfully or message doesn't exist
-        False if deletion failed due to other errors
-    """
+    """Safely delete a message without raising exceptions."""
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logger.info(f"✅ Deleted message {message_id}")
@@ -78,7 +88,7 @@ async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
     except TelegramBadRequest as e:
         if "message to delete not found" in str(e).lower():
             logger.info(f"ℹ️ Message {message_id} already deleted or not found")
-            return True  # Consider it success since message is gone
+            return True
         elif "message can't be deleted" in str(e).lower():
             logger.warning(f"⚠️ Cannot delete message {message_id} (too old or permission issue)")
             return False
@@ -90,87 +100,145 @@ async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
         return False
 
 
-def get_usage_notification(downloads_count: int, status: str) -> dict:
+def check_daily_limit(user_data: dict) -> tuple[bool, str]:
     """
-    Generate usage notification message with premium promotion.
+    Check if user has exceeded daily download limit.
     
-    Returns: dict with 'text' and 'keyboard'
+    Returns:
+        (can_download, message)
     """
-    remaining = max(0, 10 - downloads_count)
+    status = user_data.get("status", "free")
+    
+    # Premium users: unlimited
+    if status == "premium":
+        return True, ""
+    
+    # Check if still in trial period (first 7 days)
+    joined_date = user_data.get("joined_date")
+    if joined_date:
+        days_since_joined = (datetime.now(timezone.utc) - joined_date).days
+        
+        if days_since_joined < FREE_TRIAL_DAYS:
+            # Still in trial - unlimited
+            remaining_days = FREE_TRIAL_DAYS - days_since_joined
+            return True, f"🎉 រយៈពេលសាកល្បង: នៅសល់ {remaining_days} ថ្ងៃទៀត (ទាញយកមិនកំណត់)"
+    
+    # After trial: check daily limit
+    last_download_date = user_data.get("last_download_date")
+    daily_count = user_data.get("daily_download_count", 0)
+    
+    today = datetime.now(timezone.utc).date()
+    
+    # Reset counter if new day
+    if not last_download_date or last_download_date.date() != today:
+        return True, ""
+    
+    # Check if exceeded daily limit
+    if daily_count >= FREE_DAILY_LIMIT:
+        return False, (
+            f"🚫 <b>អស់ការទាញយកប្រចាំថ្ងៃរបស់អ្នកហើយ!</b>\n\n"
+            f"📊 កំណត់សម្រាប់អ្នកប្រើឥតគិតថ្លៃ: {FREE_DAILY_LIMIT} ដង/ថ្ងៃ\n"
+            f"⏰ សូមព្យាយាមម្តងទៀតនៅថ្ងៃស្អែក\n\n"
+            f"💎 <b>ចង់ប្រើមិនកំណត់?</b>\n"
+            f"Upgrade ទៅ Premium តម្លៃត្រឹមតែ $1.99!"
+        )
+    
+    remaining = FREE_DAILY_LIMIT - daily_count
+    return True, f"📊 នៅសល់: {remaining}/{FREE_DAILY_LIMIT} ដងសម្រាប់ថ្ងៃនេះ"
+
+
+def get_usage_notification(user_data: dict) -> dict:
+    """Generate usage notification with trial/daily limit info."""
+    status = user_data.get("status", "free")
     
     if status == "premium":
         return {
             "text": (
                 "✅ <b>ទាញយករួចរាល់!</b>\n\n"
-                "💎 <b>Premium Member</b>\n"
-                "♾️ ប្រើបានមិនកំណត់\n\n"
-                "<i>អរគុណសម្រាប់ការប្រើប្រាស់❤️!</i>"
+                "💎 <b>សមាជិកពិសេស Premium</b>\n"
+                "♾️ ទាញយកបានមិនកំណត់\n"
+                "🚀 ល្បឿនលឿនបំផុត\n"
+                "🎬 គុណភាព 1080p\n\n"
+                "<i>អរគុណសម្រាប់ការជឿទុកចិត្ត!</i>"
             ),
             "keyboard": None
         }
     
     # Free user
-    if remaining > 0:
-        # Calculate percentage
-        percentage = (remaining / 10) * 100
-        
-        # Progress bar
-        filled = int(remaining / 2)  # 10 downloads = 5 filled blocks
-        empty = 5 - filled
-        progress_bar = "🟩" * filled + "⬜" * empty
-        
+    joined_date = user_data.get("joined_date")
+    days_since_joined = (datetime.now(timezone.utc) - joined_date).days if joined_date else 999
+    
+    # Check if in trial period
+    if days_since_joined < FREE_TRIAL_DAYS:
+        remaining_days = FREE_TRIAL_DAYS - days_since_joined
         text = (
-            f"📢 <b>ស្ថានភាពការប្រើប្រាស់</b>\n\n"
-            f"🎞️ <b>បានទាញយក:</b> {downloads_count}/10\n"
-            f"📊 <b>នៅសល់:</b> {remaining} ដងទៀត\n"
-            f"{progress_bar} {percentage:.0f}%\n\n"
+            f"✅ <b>ទាញយករួចរាល់!</b>\n\n"
+            f"🎉 <b>រយៈពេលសាកល្បងឥតគិតថ្លៃ</b>\n"
+            f"📅 នៅសល់: {remaining_days} ថ្ងៃទៀត\n"
+            f"♾️ ទាញយកបានមិនកំណត់ (ក្នុងអំឡុងពេលសាកល្បង)\n"
+            f"🎬 គុណភាព: {FREE_MAX_QUALITY}\n\n"
+            f"💡 <b>ជូនដំណឹង:</b>\n"
+            f"បន្ទាប់ពីរយៈពេលសាកល្បងផុតកំណត់ អ្នកនឹងមានសិទ្ធិ:\n"
+            f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ\n"
+            f"• គុណភាព {FREE_MAX_QUALITY}\n"
+            f"• ល្បឿនមធ្យម\n\n"
+            f"💎 <b>ចង់បន្តប្រើមិនកំណត់?</b>\n"
+            f"Upgrade ទៅ Premium តម្លៃត្រឹមតែ $1.99!"
         )
         
-        # Add premium promotion if running low
-        if remaining <= 3:
-            text += (
-                "⚠️ <b>ជិតអស់ហើយ!</b>\n\n"
-                "🎉 <b>ទិញ Premium ដើម្បីប្រើបានរហូត!</b>\n"
-                "💰 បញ្ចុះតម្លៃ 34%! ~~$3.00~~ → <b>$1.99</b> 🔥\n"
-                "⚡ សម្រាប់ 15នាក់ដំបូង (1/15 ទិញរួច)\n\n"
-                "<i>បង់ម្តង ប្រើរហូត មិនផុតកំណត់!</i>"
-            )
-            
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="💎 ទិញឥឡូវនេះ $1.99!",
-                    callback_data="buy_premium"
-                )]
-            ])
-        else:
-            text += (
-                "💡 <b>Tip:</b> ចង់ប្រើមិនកំណត់?\n"
-                "Upgrade ទៅ Premium ត្រឹមតែ $1.99! 💎"
-            )
-            keyboard = None
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="💎 មើលអត្ថប្រយោជន៍ Premium",
+                callback_data="premium_info"
+            )]
+        ])
         
         return {"text": text, "keyboard": keyboard}
     
-    # No downloads remaining
-    return {
-        "text": (
-            "🚫 <b>អស់ការទាញយករបស់អ្នកហើយ!</b>\n\n"
-            "📊 ប្រើអស់: 10/10 ដង\n\n"
-            "🎉 <b>ទិញ Premium ដើម្បីប្រើបានរហូត!</b>\n"
-            "💰 បញ្ចុះតម្លៃ 34%! ~~$3.00~~ → <b>$1.99</b> 🔥\n"
-            "⚡ សម្រាប់ 15នាក់ដំបូង (1/15 ទិញរួច)\n\n"
-            "✅ ទាញយកគ្មានដែនកំណត់\n"
-            "✅ Support 24/7\n"
-            "✅ ល្បឿនរហ័ស\n\n"
+    # After trial - check daily limit
+    daily_count = user_data.get("daily_download_count", 0)
+    remaining = FREE_DAILY_LIMIT - daily_count
+    
+    # Progress bar
+    filled = int((daily_count / FREE_DAILY_LIMIT) * 5)
+    empty = 5 - filled
+    progress_bar = "🟩" * filled + "⬜" * empty
+    
+    text = (
+        f"📢 <b>ស្ថានភាពការទាញយក</b>\n\n"
+        f"🎞️ <b>ទាញយកថ្ងៃនេះ:</b> {daily_count}/{FREE_DAILY_LIMIT}\n"
+        f"📊 <b>នៅសល់:</b> {remaining} ដងទៀត\n"
+        f"{progress_bar}\n"
+        f"🎬 គុណភាព: {FREE_MAX_QUALITY}\n\n"
+    )
+    
+    if remaining <= 1:
+        text += (
+            "⚠️ <b>ជិតអស់សិទ្ធិសម្រាប់ថ្ងៃនេះហើយ!</b>\n\n"
+            "💎 <b>ចង់ទាញយកបានរហូត?</b>\n"
+            "• ទាញយកមិនកំណត់\n"
+            "• គុណភាព 1080p\n"
+            "• ល្បឿនលឿនបំផុត\n"
+            "• តម្លៃ: $1.99 (ពេញមួយជីវិត)\n\n"
             "<i>បង់ម្តង ប្រើរហូត!</i>"
-        ),
-        "keyboard": InlineKeyboardMarkup(inline_keyboard=[
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="💎 ទិញឥឡូវនេះ $1.99!",
+                text="💎 ទិញ Premium ឥឡូវនេះ $1.99!",
                 callback_data="buy_premium"
             )]
         ])
-    }
+    else:
+        text += (
+            "💡 <b>ជម្រើស Premium:</b>\n"
+            "• ទាញយកមិនកំណត់\n"
+            "• គុណភាព 1080p\n"
+            "• តម្លៃ: $1.99 ពេញមួយជីវិត"
+        )
+        keyboard = None
+    
+    return {"text": text, "keyboard": keyboard}
 
 
 class DownloadState(StatesGroup):
@@ -179,6 +247,7 @@ class DownloadState(StatesGroup):
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    """Handle /start command with detailed welcome message."""
     user_id = message.from_user.id
     user_data, is_new = await db.get_user(user_id)
     
@@ -188,583 +257,203 @@ async def cmd_start(message: Message):
             bot=message.bot
         )
 
-    status = user_data.get("status")
-    downloads_count = user_data.get("downloads_count", 0)
+    status = user_data.get("status", "free")
     
-    if status == "premium":
-        status_icon = "💎"
-        status_text = "PREMIUM"
-        downloads_text = "Unlimited ♾️"
-    else:
-        status_icon = "🆓"
-        status_text = "FREE"
-        remaining = max(0, 10 - downloads_count)
-        downloads_text = f"{remaining}/10 នៅសល់"
+    # Welcome message
+    welcome = f"👋 <b>សួស្តី {escape(message.from_user.full_name)}!</b>\n\n"
     
-    text = (
-        f"👋 <b>សួស្តី {message.from_user.full_name}!</b>\n\n"
-        f"ខ្ញុំអាចទាញយក videos ពី TikTok, FB, IG, YouTube។\n"
-        f"គ្រាន់តែផ្ញើ link មកខ្ញុំ!\n\n"
-        f"📊 <b>ស្ថានភាពរបស់អ្នក:</b> {status_text} {status_icon}\n"
-        f"⬇️ <b>ការទាញយក:</b> {downloads_text}"
+    # Bot capabilities
+    welcome += (
+        "🤖 <b>អ្វីដែលបតអាចធ្វើបាន:</b>\n"
+        "✅ ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
+        "✅ គាំទ្រ: TikTok, Facebook, YouTube Shorts, Instagram, Pinterest\n"
+        "✅ ទាញយកជា Video ឬ Audio\n"
+        "✅ គុណភាពល្អ (អាស្រ័យលើគណនីរបស់អ្នក)\n\n"
+        
+        "🚫 <b>កំណត់:</b>\n"
+        "❌ មិនគាំទ្រវីដេអូ Private\n"
+        "❌ មិនគាំទ្រវីដេអូដែលមាន Copyright\n"
+        "❌ ទំហំវីដេអូត្រូវតូចជាង 49MB\n"
+        "❌ ត្រឹមតែវីដេអូ Public ប៉ុណ្ណោះ\n\n"
     )
+    
+    # Show status based on user type
+    if status == "premium":
+        welcome += (
+            "💎 <b>ស្ថានភាពរបស់អ្នក: PREMIUM</b>\n\n"
+            "🎁 <b>អត្ថប្រយោជន៍របស់អ្នក:</b>\n"
+            "♾️ ទាញយកបានមិនកំណត់\n"
+            "🎬 គុណភាព 1080p\n"
+            "🚀 ល្បឿនលឿនបំផុត\n"
+            "💬 ជំនួយអាទិភាព 24/7\n\n"
+            "<i>គ្រាន់តែផ្ញើ link មកខ្ញុំ ហើយខ្ញុំនឹងទាញយកឱ្យអ្នក!</i>"
+        )
+    else:
+        # Check trial status
+        joined_date = user_data.get("joined_date")
+        days_since_joined = (datetime.now(timezone.utc) - joined_date).days if joined_date else 0
+        
+        if days_since_joined < FREE_TRIAL_DAYS:
+            # In trial
+            remaining_days = FREE_TRIAL_DAYS - days_since_joined
+            welcome += (
+                f"🎉 <b>ស្ថានភាពរបស់អ្នក: រយៈពេលសាកល្បង</b>\n\n"
+                f"📅 <b>នៅសល់:</b> {remaining_days} ថ្ងៃទៀត\n\n"
+                f"🎁 <b>អត្ថប្រយោជន៍បច្ចុប្បន្ន:</b>\n"
+                f"♾️ ទាញយកមិនកំណត់ (ក្នុងអំឡុងពេលសាកល្បង)\n"
+                f"🎬 គុណភាព {FREE_MAX_QUALITY}\n"
+                f"⚡ ល្បឿនមធ្យម\n\n"
+                f"⚠️ <b>បន្ទាប់ពីរយៈពេលសាកល្បង:</b>\n"
+                f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ\n"
+                f"• គុណភាព {FREE_MAX_QUALITY}\n"
+                f"• ល្បឿនមធ្យម\n\n"
+            )
+        else:
+            # After trial
+            daily_count = user_data.get("daily_download_count", 0)
+            remaining = FREE_DAILY_LIMIT - daily_count
+            
+            welcome += (
+                f"🆓 <b>ស្ថានភាពរបស់អ្នក: ឥតគិតថ្លៃ</b>\n\n"
+                f"🎁 <b>អត្ថប្រយោជន៍បច្ចុប្បន្ន:</b>\n"
+                f"📊 {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (នៅសល់: {remaining})\n"
+                f"🎬 គុណភាព {FREE_MAX_QUALITY}\n"
+                f"⚡ ល្បឿនមធ្យម\n\n"
+            )
+        
+        # Premium comparison
+        welcome += (
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💎 <b>ប្រៀបធៀប: ឥតគិតថ្លៃ vs Premium</b>\n\n"
+            "<b>ឥតគិតថ្លៃ:</b>\n"
+            f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (បន្ទាប់ពីសាកល្បង)\n"
+            f"• គុណភាព {FREE_MAX_QUALITY}\n"
+            "• ល្បឿនមធ្យម\n\n"
+            "<b>Premium ($1.99 ពេញមួយជីវិត):</b>\n"
+            "• ទាញយកមិនកំណត់ ♾️\n"
+            "• គុណភាព 1080p 🎬\n"
+            "• ល្បឿនលឿនបំផុត 🚀\n"
+            "• ជំនួយអាទិភាព 💬\n"
+            "• គ្មានការបង់ប្រចាំខែ ✅\n\n"
+            "<i>បង់ម្តង ប្រើរហូត! តម្លៃសមរម្យបំផុត!</i>"
+        )
 
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(welcome, parse_mode="HTML")
 
 
 @router.message(Command("plan"))
 async def cmd_plan(message: Message):
+    """Show user plan details."""
     user_id = message.from_user.id
     user_data, _ = await db.get_user(user_id)
     
-    status = user_data.get("status")
-    count = user_data.get("downloads_count", 0)
+    status = user_data.get("status", "free")
+    joined_date = user_data.get("joined_date")
     
     if status == "premium":
-        status_display = "PREMIUM 💎"
-        downloads_display = "Unlimited ♾️"
-        usage_note = "✨ <i>អ្នកជា Premium member រីករាយជាមួយការទាញយកមិនកំណត់!</i>"
-    else:
-        status_display = "FREE 🆓"
-        remaining = max(0, 10 - count)
-        downloads_display = f"{remaining}/10 នៅសល់"
-        usage_note = (
-            "⚠️ <i>កំណត់: 10 downloads។ ចង់បានមិនកំណត់?</i>\n\n"
-            "💎 <b>Upgrade ទៅ Lifetime Premium $1.99!</b>\n"
-            "• បង់ម្តង ប្រើរហូត\n"
-            "• គ្មានការបង់ប្រចាំខែ\n"
-            "• ទាញយកមិនកំណត់\n\n"
-            "ចុច /start ហើយជ្រើសរើស Premium!"
+        text = (
+            f"📊 <b>ព័ត៌មានគណនីរបស់អ្នក</b>\n\n"
+            f"👤 ឈ្មោះ: {escape(message.from_user.full_name)}\n"
+            f"🏷 ស្ថានភាព: <b>PREMIUM 💎</b>\n\n"
+            f"🎁 <b>អត្ថប្រយោជន៍:</b>\n"
+            f"♾️ ទាញយកមិនកំណត់\n"
+            f"🎬 គុណភាព 1080p\n"
+            f"🚀 ល្បឿនលឿនបំផុត\n"
+            f"💬 ជំនួយអាទិភាព 24/7\n\n"
+            f"<i>សូមអរគុណសម្រាប់ការគាំទ្រ! ❤️</i>"
         )
-    
-    text = (
-        f"📊 <b>ស្ថិតិការប្រើប្រាស់</b>\n\n"
-        f"👤 អ្នកប្រើ: {message.from_user.full_name}\n"
-        f"🏷 ស្ថានភាព: <b>{status_display}</b>\n"
-        f"📥 ការទាញយក: <b>{downloads_display}</b>\n\n"
-        f"{usage_note}"
-    )
+    else:
+        days_since_joined = (datetime.now(timezone.utc) - joined_date).days if joined_date else 0
+        
+        if days_since_joined < FREE_TRIAL_DAYS:
+            # In trial
+            remaining_days = FREE_TRIAL_DAYS - days_since_joined
+            text = (
+                f"📊 <b>ព័ត៌មានគណនីរបស់អ្នក</b>\n\n"
+                f"👤 ឈ្មោះ: {escape(message.from_user.full_name)}\n"
+                f"🏷 ស្ថានភាព: <b>រយៈពេលសាកល្បង 🎉</b>\n"
+                f"📅 នៅសល់: <b>{remaining_days} ថ្ងៃទៀត</b>\n\n"
+                f"🎁 <b>អត្ថប្រយោជន៍បច្ចុប្បន្ន:</b>\n"
+                f"♾️ ទាញយកមិនកំណត់ (ក្នុងអំឡុងពេលសាកល្បង)\n"
+                f"🎬 គុណភាព {FREE_MAX_QUALITY}\n"
+                f"⚡ ល្បឿនមធ្យម\n\n"
+                f"⚠️ <b>បន្ទាប់ពីសាកល្បង:</b>\n"
+                f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ\n"
+                f"• គុណភាព {FREE_MAX_QUALITY}\n\n"
+                f"💎 Upgrade ទៅ Premium តម្លៃត្រឹមតែ $1.99 ពេញមួយជីវិត!"
+            )
+        else:
+            # After trial
+            daily_count = user_data.get("daily_download_count", 0)
+            remaining = FREE_DAILY_LIMIT - daily_count
+            
+            text = (
+                f"📊 <b>ព័ត៌មានគណនីរបស់អ្នក</b>\n\n"
+                f"👤 ឈ្មោះ: {escape(message.from_user.full_name)}\n"
+                f"🏷 ស្ថានភាព: <b>ឥតគិតថ្លៃ 🆓</b>\n\n"
+                f"🎁 <b>អត្ថប្រយោជន៍បច្ចុប្បន្ន:</b>\n"
+                f"📊 {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (នៅសល់: {remaining})\n"
+                f"🎬 គុណភាព {FREE_MAX_QUALITY}\n"
+                f"⚡ ល្បឿនមធ្យម\n\n"
+                f"💎 <b>Upgrade ទៅ Premium:</b>\n"
+                f"• ទាញយកមិនកំណត់ ♾️\n"
+                f"• គុណភាព 1080p 🎬\n"
+                f"• ល្បឿនលឿន 🚀\n"
+                f"• តម្លៃ: $1.99 (ពេញមួយជីវិត)\n\n"
+                f"<i>បង់ម្តង ប្រើរហូត!</i>"
+            )
         
     await message.answer(text, parse_mode="HTML")
 
 
-@router.message(Command("broadcast"))
-async def cmd_broadcast(message: Message):
-    """Admin command to broadcast message to all users."""
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    # Get message text after /broadcast
-    text = message.text.replace("/broadcast", "", 1).strip()
-    
-    if not text:
-        await message.answer(
-            "⚠️ <b>Usage:</b> /broadcast [your message]\n\n"
-            "<b>Example:</b>\n"
-            "/broadcast 🔧 Bot will be under maintenance for 30 minutes.\n\n"
-            "<b>Special Commands:</b>\n"
-            "/broadcast_promo - Send premium promotion with buy button",
-            parse_mode="HTML"
-        )
-        return
-    
-    # Get all users from database
-    try:
-        # Get all users
-        all_users = await db.users.find({}).to_list(length=None)
-        
-        total = len(all_users)
-        success = 0
-        failed = 0
-        
-        # Show progress
-        progress_msg = await message.answer(
-            f"📢 <b>Broadcasting...</b>\n"
-            f"Total users: {total}\n"
-            f"Sent: 0\n"
-            f"Failed: 0",
-            parse_mode="HTML"
-        )
-        
-        # Send to each user
-        for idx, user in enumerate(all_users, 1):
-            user_id = user.get("user_id")
-            
-            try:
-                # Send message with admin badge
-                broadcast_text = (
-                    f"📢 <b>Announcement from Admin</b>\n\n"
-                    f"{text}\n\n"
-                    f"<i>This is an official message from the bot administrator.</i>"
-                )
-                
-                await message.bot.send_message(
-                    chat_id=user_id,
-                    text=broadcast_text,
-                    parse_mode="HTML"
-                )
-                success += 1
-                
-                # Avoid Telegram rate limits (30 messages/second)
-                if idx % 20 == 0:
-                    await asyncio.sleep(1)
-                
-                # Update progress every 10 users
-                if idx % 10 == 0 or idx == total:
-                    await progress_msg.edit_text(
-                        f"📢 <b>Broadcasting...</b>\n"
-                        f"Total users: {total}\n"
-                        f"✅ Sent: {success}\n"
-                        f"❌ Failed: {failed}\n"
-                        f"Progress: {idx}/{total} ({idx*100//total}%)",
-                        parse_mode="HTML"
-                    )
-                
-            except Exception as e:
-                failed += 1
-                logger.warning(f"Failed to send to {user_id}: {e}")
-        
-        # Final report
-        await progress_msg.edit_text(
-            f"✅ <b>Broadcast Complete!</b>\n\n"
-            f"📊 Total users: {total}\n"
-            f"✅ Successfully sent: {success}\n"
-            f"❌ Failed: {failed}\n\n"
-            f"<i>Failed users may have blocked the bot.</i>",
-            parse_mode="HTML"
-        )
-        # Log to channel
-        await send_log(
-            f"📢 Broadcast Sent\n"
-            f"By: Admin (`{ADMIN_ID}`)\n"
-            f"Success: {success}/{total}\n"
-            f"Message: {text[:100]}...",
-            bot=message.bot
-        )
-        
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-        await message.answer(
-            f"❌ <b>Broadcast Failed</b>\n\n"
-            f"Error: {escape(str(e))}",
-            parse_mode="HTML"
-        )
-
-@router.message(Command("broadcast_promo"))
-async def cmd_broadcast_promo(message: Message):
-    """Admin command to broadcast premium promotion with buy button."""
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    try:
-        # Get premium users count to calculate remaining slots
-        stats = await db.count_users()
-        premium_sold = stats['premium']
-        slots_remaining = max(0, 15 - premium_sold)
-        
-        # Don't send if all slots are sold
-        if slots_remaining == 0:
-            await message.answer(
-                "⚠️ <b>All discount slots are sold out!</b>\n\n"
-                "All 15 lifetime discount slots have been claimed.\n"
-                "Update promotion or pricing before sending.",
-                parse_mode="HTML"
-            )
-            return
-        
-        # Get all FREE users only
-        all_users = await db.users.find({"status": "free"}).to_list(length=None)
-        
-        total = len(all_users)
-        success = 0
-        failed = 0
-        
-        # Create buy button
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"💎 Buy Lifetime Premium - ${1.99:.2f}!",
-                    callback_data="buy_premium"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📋 See Premium Benefits",
-                    callback_data="premium_info"
-                )
-            ]
-        ])
-        
-        # Promotion message with lifetime and slots info
-        promo_text = (
-            "🎉 <b>LIMITED LIFETIME OFFER!</b> 🎉\n\n"
-            "💎 <b>Lifetime Premium Access</b>\n"
-            f"~~$3.00~~ → <b>${1.99:.2f}</b> (34% OFF!) 🔥\n\n"
-            f"⚡ <b>Only {slots_remaining} slots remaining!</b>\n"
-            f"📊 {premium_sold}/15 already claimed\n\n"
-            "<b>🎁 What You Get (FOREVER):</b>\n"
-            "✅ Unlimited downloads\n"
-            "✅ No daily limits\n"
-            "✅ Priority support 24/7\n"
-            "✅ Faster download speeds\n"
-            "✅ Ad-free experience\n"
-            "✅ Early access to new features\n\n"
-            "💰 <b>Pay once, use forever!</b>\n"
-            f"⏰ <b>Hurry! Only {slots_remaining} lifetime slots left!</b>\n\n"
-            "<i>This is a one-time payment. No recurring fees! 🚀</i>"
-        )
-        
-        # Show progress
-        progress_msg = await message.answer(
-            f"💎 <b>Sending Lifetime Promo...</b>\n"
-            f"Target: Free users\n"
-            f"Total: {total}\n"
-            f"Slots remaining: {slots_remaining}/15\n"
-            f"Sent: 0",
-            parse_mode="HTML"
-        )
-        
-        # Send to each free user
-        for idx, user in enumerate(all_users, 1):
-            user_id = user.get("user_id")
-            
-            try:
-                await message.bot.send_message(
-                    chat_id=user_id,
-                    text=promo_text,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
-                success += 1
-                
-                # Rate limiting
-                if idx % 20 == 0:
-                    await asyncio.sleep(1)
-                
-                # Update progress
-                if idx % 10 == 0 or idx == total:
-                    await progress_msg.edit_text(
-                        f"💎 <b>Sending Lifetime Promo...</b>\n"
-                        f"Target: Free users\n"
-                        f"Total: {total}\n"
-                        f"Slots remaining: {slots_remaining}/15\n"
-                        f"✅ Sent: {success}\n"
-                        f"❌ Failed: {failed}\n"
-                        f"Progress: {idx}/{total} ({idx*100//total}%)",
-                        parse_mode="HTML"
-                    )
-                
-            except Exception as e:
-                failed += 1
-                logger.warning(f"Failed promo to {user_id}: {e}")
-        
-        # Calculate potential revenue
-        potential_revenue = slots_remaining * 1.99
-        
-        # Final report
-        await progress_msg.edit_text(
-            f"✅ <b>Promotion Campaign Complete!</b>\n\n"
-            f"🎯 Targeted: Free users\n"
-            f"📊 Total sent: {success}\n"
-            f"❌ Failed: {failed}\n\n"
-            f"💎 <b>Lifetime Slots:</b>\n"
-            f"• Sold: {premium_sold}/15\n"
-            f"• Remaining: {slots_remaining}/15\n"
-            f"• Potential revenue: ${potential_revenue:.2f}\n\n"
-            f"<i>Track conversions in /stats</i>",
-            parse_mode="HTML"
-        )
-        
-        # Log
-        await send_log(
-            f"💎 Lifetime Promo Sent\n"
-            f"Targeted: {total} free users\n"
-            f"Success: {success}\n"
-            f"Slots: {slots_remaining}/15 left\n"
-            f"Potential: ${potential_revenue:.2f}",
-            bot=message.bot
-        )
-        
-    except Exception as e:
-        logger.error(f"Promo broadcast error: {e}")
-        await message.answer(f"❌ Error: {escape(str(e))}", parse_mode="HTML")
-
-@router.callback_query(F.data == "buy_premium")
-async def handle_buy_premium(callback: CallbackQuery):
-    """Handle buy premium button click - Show QR Code payment."""
-    
-    # Check remaining slots
-    stats = await db.count_users()
-    premium_sold = stats['premium']
-    slots_remaining = max(0, 15 - premium_sold)
-    
-    # Check if sold out
-    if slots_remaining == 0:
-        await callback.message.edit_text(
-            "😢 <b>Sorry, All Slots Sold Out!</b>\n\n"
-            "All 15 lifetime discount slots have been claimed.\n\n"
-            "💬 Contact admin for regular pricing or future offers.",
-            parse_mode="HTML"
-        )
-        return
-    
-    # Check if payment.jpg exists
-    payment_qr_path = "payment.jpg"
-    
-    if not os.path.exists(payment_qr_path):
-        await callback.message.edit_text(
-            "❌ <b>Payment QR Code not found!</b>\n\n"
-            "Please contact admin to set up payment method.",
-            parse_mode="HTML"
-        )
-        logger.error(f"payment.jpg not found in project root!")
-        return
-    
-    payment_caption = (
-        "💳 <b>Lifetime Premium Payment</b>\n\n"
-        f"💎 <b>Lifetime Access:</b> ${1.99:.2f} (One-time payment)\n"
-        f"⚡ <b>Slots Remaining:</b> {slots_remaining}/15\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "📱 <b>របៀបបង់ប្រាក់:</b>\n\n"
-        "1️⃣ ស្កេន QR Code ខាងក្រោម\n"
-        f"2️⃣ បង់ចំនួន <b>${1.99:.2f}</b>\n"
-        "3️⃣ ថតរូបវិក័យបត្រ (Screenshot)\n"
-        "4️⃣ ផ្ញើវិក័យបត្រមកទីនេះវិញ\n"
-        "5️⃣ រង់ចាំ Admin ពិនិត្យ និងបើកសិទ្ធ\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "✅ <b>ពេលវេលាដំណើរការ:</b> ក្នុងរយៈពេល 1 ម៉ោង\n"
-        "♾️ <b>រយៈពេលសុពលភាព:</b> LIFETIME (មិនផុតកំណត់)\n\n"
-        f"🆔 <b>User ID របស់អ្នក:</b> <code>{callback.from_user.id}</code>\n"
-        "<i>(សូមរក្សាទុក ID នេះ)</i>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🎁 <b>អត្ថប្រយោជន៍ Lifetime Premium:</b>\n"
-        "• ទាញយកគ្មានដែនកំណត់ (ជារៀងរហូត)\n"
-        "• មិនមានការរឹតបន្តឹងប្រចាំថ្ងៃ\n"
-        "• ល្បឿនទាញយករហ័ស\n"
-        "• គាំទ្រអាទិភាព 24/7\n"
-        "• គ្មានការបង់ប្រាក់ប្រចាំខែ\n"
-        "• បង់តែម្តង ប្រើរហូត! 🚀\n\n"
-        f"⚠️ <b>Hurry! Only {slots_remaining} discount slots left!</b>\n\n"
-        "❓ <b>មានសំណួរ?</b> ផ្ញើសារមក Admin នៅក្នុង Channel"
-    )
-    
-    try:
-        # Delete previous message
-        await callback.message.delete()
-        
-        # Send QR Code image
-        photo = FSInputFile(payment_qr_path)
-        await callback.message.answer_photo(
-            photo=photo,
-            caption=payment_caption,
-            parse_mode="HTML"
-        )
-        
-        # Log interest with slots info
-        await send_log(
-            f"💰 Premium Interest\n"
-            f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)\n"
-            f"Action: Opened payment QR Code\n"
-            f"Slots remaining: {slots_remaining}/15",
-            bot=callback.bot
-        )
-        
-    except Exception as e:
-        logger.error(f"Error showing QR code: {e}")
-        await callback.answer(
-            "❌ មានបញ្ហាក្នុងការបង្ហាញ QR Code។ សូមព្យាយាមម្តងទៀត។",
-            show_alert=True
-        )
-
-@router.callback_query(F.data == "premium_info")
-async def handle_premium_info(callback: CallbackQuery):
-    """Show detailed premium benefits."""
-    
-    # Get slots info
-    stats = await db.count_users()
-    premium_sold = stats['premium']
-    slots_remaining = max(0, 15 - premium_sold)
-    
-    info_text = (
-        "💎 <b>Lifetime Premium Membership</b>\n\n"
-        f"💰 <b>Price:</b> ~~$3.00~~ → <b>${1.99:.2f}</b>\n"
-        f"⚡ <b>Slots Left:</b> {slots_remaining}/15\n"
-        f"📊 <b>Already Sold:</b> {premium_sold}/15\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "<b>📥 Downloads:</b>\n"
-        "✅ Unlimited downloads forever\n"
-        "✅ No daily/monthly limits\n"
-        "✅ All platforms supported\n"
-        "✅ High-quality (up to 1080p)\n\n"
-        "<b>⚡ Performance:</b>\n"
-        "🚀 Priority download queue\n"
-        "🚀 Faster download speeds\n"
-        "🚀 Multiple concurrent downloads\n\n"
-        "<b>🎯 Support:</b>\n"
-        "💬 Priority customer support\n"
-        "💬 Direct contact with admin\n"
-        "💬 24/7 assistance\n\n"
-        "<b>🎨 Features:</b>\n"
-        "✨ Ad-free experience\n"
-        "✨ Early access to new features\n"
-        "✨ Custom preferences\n"
-        "✨ Lifetime access (no expiration)\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💵 <b>One-Time Payment:</b>\n"
-        f"• Pay <b>${1.99:.2f}</b> once\n"
-        "• Use forever\n"
-        "• No monthly fees\n"
-        "• No hidden charges\n\n"
-        f"⚠️ <b>Limited Offer:</b> Only {slots_remaining} slots left!\n\n"
-        "<i>After 15 sales, price returns to $3.00</i>"
-    )
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=f"💳 Buy Now - ${1.99:.2f} ({slots_remaining} left)",
-                callback_data="buy_premium"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="❌ Close",
-                callback_data="close_info"
-            )
-        ]
-    ])
-    
-    await callback.message.edit_text(
-        info_text,
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
-
-@router.callback_query(F.data == "close_info")
-async def handle_close_info(callback: CallbackQuery):
-    """Close premium info message."""
-    await callback.message.delete()
-
-@router.message(Command("stats"))
-async def cmd_stats(message: Message):
-    """Admin command to view bot statistics."""
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    try:
-        stats = await db.count_users()
-        
-        # Calculate total downloads
-        pipeline = [
-            {"$group": {
-                "_id": None,
-                "total_downloads": {"$sum": "$downloads_count"}
-            }}
-        ]
-        
-        result = await db.users.aggregate(pipeline).to_list(length=1)
-        total_downloads = result[0]["total_downloads"] if result else 0
-        
-        # Lifetime slots info
-        premium_sold = stats['premium']
-        slots_remaining = max(0, 15 - premium_sold)
-        lifetime_revenue = premium_sold * 1.99
-        potential_revenue = slots_remaining * 1.99
-        
-        text = (
-            f"📊 <b>Bot Statistics</b>\n\n"
-            f"👥 Total Users: <b>{stats['total']}</b>\n"
-            f"💎 Premium Users: <b>{stats['premium']}</b>\n"
-            f"🆓 Free Users: <b>{stats['free']}</b>\n\n"
-            f"⬇️ Total Downloads: <b>{total_downloads}</b>\n"
-            f"📈 Avg per user: <b>{total_downloads // stats['total'] if stats['total'] > 0 else 0}</b>\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"💰 <b>Lifetime Discount Campaign:</b>\n"
-            f"• Price: ${1.99:.2f} (Lifetime)\n"
-            f"• Sold: <b>{premium_sold}/15</b>\n"
-            f"• Remaining: <b>{slots_remaining}/15</b>\n"
-            f"• Revenue: <b>${lifetime_revenue:.2f}</b>\n"
-            f"• Potential: <b>${potential_revenue:.2f}</b>\n\n"
-            f"{'⚠️ <b>All slots sold out!</b>' if slots_remaining == 0 else f'✅ <b>{slots_remaining} slots available</b>'}\n\n"
-            f"<i>Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
-        )
-        
-        await message.answer(text, parse_mode="HTML")
-        
-    except Exception as e:
-        logger.error(f"Stats error: {e}")
-        await message.answer(f"❌ Error: {escape(str(e))}", parse_mode="HTML")
-
-@router.message(Command("approve"))
-async def cmd_approve(message: Message):
-    # Security: Use integer comparison for admin check
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    try:
-        target_id = int(message.text.split()[1])
-        success = await db.set_premium(target_id)
-        
-        if success:
-            await message.answer(f"✅ User {target_id} is now PREMIUM.")
-            await message.bot.send_message(
-                target_id, 
-                "🎉 <b>Congratulations!</b> Your account has been upgraded to PREMIUM! 💎", 
-                parse_mode="HTML"
-            )
-            await send_log(
-                f"👮‍♂️ Admin approved Premium for `{target_id}`",
-                bot=message.bot
-            )
-        else:
-            await message.answer("❌ Failed to update user. Check ID.")
-    except (IndexError, ValueError):
-        await message.answer("⚠️ Usage: /approve [user_id]")
-
-
-
 @router.message(F.text.regexp(r'(https?://[^\s]+)'))
 async def handle_link(message: Message, state: FSMContext):
+    """Handle video URL messages."""
     user_id = message.from_user.id
     user_data, _ = await db.get_user(user_id)
     
-    if user_data.get("status") == "free" and user_data.get("downloads_count") >= 10:
-        await message.answer(
-            "🚫 <b>អស់ការទាញយករបស់អ្នកហើយ!</b>\n\n"
-            "អ្នកបានប្រើអស់ការទាញយក 10 ដងរបស់អ្នក។\n"
-            "សូម upgrade ទៅ Premium ដើម្បីបន្ត។\n\n"
-            "💎 <b>ទិញ Premium:</b> ផ្ញើរូបវិក័យបត្រមកទីនេះ។",
-            parse_mode="HTML"
-        )
+    # Check daily limit for free users
+    can_download, limit_msg = check_daily_limit(user_data)
+    
+    if not can_download:
+        await message.answer(limit_msg, parse_mode="HTML")
         return
 
     url = message.text.strip()
     
+    # Validate URL
     is_valid, error_msg = validate_url(url)
     if not is_valid:
         await message.answer(
-            f"⚠️ <b>Invalid URL</b>\n\n{escape(error_msg or 'Unknown error')}",
+            f"⚠️ <b>URL មិនត្រឹមត្រូវ</b>\n\n{error_msg}",
             parse_mode="HTML"
         )
         return
     
-    # Store URL and message IDs for cleanup
+    # Store URL and message IDs
     await state.update_data(url=url, url_message_id=message.message_id)
     await state.set_state(DownloadState.waiting_for_format)
     
+    # Show format selection
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🎬 Video (MP4)", callback_data="fmt_video"),
-            InlineKeyboardButton(text="🎵 Audio (M4A)", callback_data="fmt_audio")
+            InlineKeyboardButton(text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"),
+            InlineKeyboardButton(text="🎵 អូឌីយ៉ូ (M4A)", callback_data="fmt_audio")
         ]
     ])
     
-    format_msg = await message.answer("👇 ជ្រើសរើសប្រភេទទាញយក:", reply_markup=keyboard)
+    # Show limit info if available
+    info_text = "👇 សូមជ្រើសរើសប្រភេទ:\n\n"
+    if limit_msg:
+        info_text += f"<i>{limit_msg}</i>"
+    
+    format_msg = await message.answer(info_text, reply_markup=keyboard, parse_mode="HTML")
     await state.update_data(format_message_id=format_msg.message_id)
 
 
 @router.callback_query(F.data.startswith("fmt_"))
 async def process_download_callback(callback: CallbackQuery, state: FSMContext):
+    """Handle format selection and download."""
     data = await state.get_data()
     url = data.get("url")
     url_message_id = data.get("url_message_id")
@@ -772,7 +461,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
     file_path = None
     
     if not url:
-        await callback.message.edit_text("⚠️ Session ផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត។")
+        await callback.message.edit_text("⚠️ សម័យផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត។")
         return
 
     download_type = "audio" if callback.data == "fmt_audio" else "video"
@@ -783,6 +472,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
     
+    # Download with timeout
     try:
         result = await asyncio.wait_for(
             downloader.download(url, type=download_type),
@@ -792,7 +482,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         logger.warning(f"Download timeout for URL: {url}")
         await progress_msg.edit_text(
             "❌ <b>ការទាញយកយូរពេកហើយ</b>\n\n"
-            "សូមព្យាយាមម្តងទៀតជាមួយ video ខ្លីជាងនេះ។",
+            "សូមព្យាយាមជាមួយវីដេអូខ្លីជាងនេះ។",
             parse_mode="HTML"
         )
         await send_log(
@@ -805,9 +495,10 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
     
+    # Handle download errors
     if result["status"] == "error":
         safe_message = escape(result.get('message', 'Unknown error'))
-        await progress_msg.edit_text(f"❌ <b>Error:</b> {safe_message}", parse_mode="HTML")
+        await progress_msg.edit_text(f"❌ <b>មានបញ្ហា:</b> {safe_message}", parse_mode="HTML")
         
         await send_log(
             f"❌ Download Error\n"
@@ -822,31 +513,33 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
 
     file_path = result["file_path"]
     
-    # ✅ Check file size before uploading
+    # Check file size
     if os.path.exists(file_path):
         file_size = os.path.getsize(file_path)
         if file_size > MAX_FILE_SIZE:
             await progress_msg.edit_text(
-                f"❌ <b>File ធំពេកសម្រាប់ Telegram</b>\n\n"
+                f"❌ <b>ឯកសារធំពេកសម្រាប់ Telegram</b>\n\n"
                 f"📊 ទំហំ: {file_size / 1024 / 1024:.1f}MB\n"
                 f"⚠️ កំណត់: {MAX_FILE_SIZE / 1024 / 1024:.0f}MB\n\n"
-                f"សូមព្យាយាម video គុណភាពទាបជាង ឬ audio only។",
+                f"សូមព្យាយាមវីដេអូគុណភាពទាបជាង ឬជ្រើសរើសអូឌីយ៉ូ។",
                 parse_mode="HTML"
             )
             await safe_remove_file(file_path)
             await state.clear()
             return
     
+    # Prepare caption
     safe_title = escape(str(result.get('title', 'Unknown')))
     safe_duration = escape(str(result.get('duration', 0)))
     
     caption = (
         f"✅ <b>ទាញយករួចរាល់!</b>\n"
         f"📌 ចំណងជើង: {safe_title}\n"
-        f"⏱ រយៈពេល: {safe_duration}s\n"
-        f"🤖 via @ravi_downloader_bot"
+        f"⏱ រយៈពេល: {safe_duration}វិ\n"
+        f"🤖 តាមរយៈ @ravi_downloader_bot"
     )
 
+    # Upload file
     try:
         await progress_msg.edit_text("📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
         
@@ -857,65 +550,75 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         else:
             await callback.message.answer_video(file_input, caption=caption, parse_mode="HTML")
         
-        # ✅ Safe cleanup of messages
+        # Cleanup messages
         chat_id = callback.message.chat.id
         
-        # Delete URL message
         if url_message_id:
             await safe_delete_message(callback.bot, chat_id, url_message_id)
         
-        # Delete format selection message
         if format_message_id:
             await safe_delete_message(callback.bot, chat_id, format_message_id)
         
-        # Delete progress message
         try:
             await progress_msg.delete()
         except Exception as e:
             logger.warning(f"Could not delete progress message: {e}")
         
-        # Update stats and show notification
+        # Update download stats
         user_id = callback.from_user.id
         user_data, _ = await db.get_user(user_id)
         
-        if user_data.get("status") == "free":
-            await db.increment_download(user_id)
+        # Update daily counter for free users
+        if user_data.get("status") != "premium":
+            today = datetime.now(timezone.utc)
+            last_download_date = user_data.get("last_download_date")
             
-            # Get updated user data and show usage notification
+            # Reset if new day
+            if not last_download_date or last_download_date.date() != today.date():
+                await db.users.update_one(
+                    {"user_id": user_id},
+                    {
+                        "$set": {
+                            "last_download_date": today,
+                            "daily_download_count": 1
+                        }
+                    }
+                )
+            else:
+                # Increment daily counter
+                await db.users.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"daily_download_count": 1}}
+                )
+            
+            # Get updated data
             updated_user_data, _ = await db.get_user(user_id)
-            downloads_count = updated_user_data.get("downloads_count", 0)
-            status = updated_user_data.get("status", "free")
-            
-            notification = get_usage_notification(downloads_count, status)
-            
-            await callback.message.answer(
-                notification["text"],
-                parse_mode="HTML",
-                reply_markup=notification["keyboard"]
-            )
+            notification = get_usage_notification(updated_user_data)
         else:
-            # Premium user - simple success message
-            notification = get_usage_notification(0, "premium")
-            await callback.message.answer(
-                notification["text"],
-                parse_mode="HTML"
-            )
+            # Premium user
+            notification = get_usage_notification(user_data)
+        
+        # Send notification
+        await callback.message.answer(
+            notification["text"],
+            parse_mode="HTML",
+            reply_markup=notification["keyboard"]
+        )
             
     except TelegramBadRequest as e:
-        logger.error(f"Telegram API error during upload: {e}")
+        logger.error(f"Telegram API error: {e}")
         
-        # Check specific error types
         error_str = str(e).lower()
         if "file is too big" in error_str or "too large" in error_str:
             error_msg = (
-                "❌ <b>File ធំពេកសម្រាប់ Telegram</b>\n\n"
+                "❌ <b>ឯកសារធំពេកសម្រាប់ Telegram</b>\n\n"
                 "⚠️ Telegram កំណត់: 50MB\n"
-                "សូមព្យាយាម video គុណភាពទាបជាង ឬ audio only។"
+                "សូមព្យាយាមវីដេអូគុណភាពទាបជាង។"
             )
         elif "wrong file identifier" in error_str:
-            error_msg = "❌ មានបញ្ហាជាមួយ file format។ សូមព្យាយាមម្តងទៀត។"
+            error_msg = "❌ មានបញ្ហាជាមួយទម្រង់ឯកសារ។ សូមព្យាយាមម្តងទៀត។"
         else:
-            error_msg = f"❌ មិនអាចបញ្ជូន file បានទេ។\n\n<code>{escape(str(e)[:200])}</code>"
+            error_msg = f"❌ មិនអាចបញ្ជូនឯកសារបានទេ។\n\n<code>{escape(str(e)[:200])}</code>"
         
         await callback.message.answer(error_msg, parse_mode="HTML")
         
@@ -929,7 +632,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.error(f"Upload failed: {e}", exc_info=True)
         await callback.message.answer(
-            f"❌ មានបញ្ហាក្នុងការបញ្ជូន file។\n\n"
+            f"❌ មានបញ្ហាក្នុងការបញ្ជូនឯកសារ។\n\n"
             f"<code>{escape(str(e)[:200])}</code>",
             parse_mode="HTML"
         )
@@ -947,8 +650,312 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         await state.clear()
 
 
+# ====== Admin Commands ======
+
+@router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message):
+    """Admin: Broadcast message to all users."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    text = message.text.replace("/broadcast", "", 1).strip()
+    
+    if not text:
+        await message.answer(
+            "⚠️ <b>របៀបប្រើប្រាស់:</b> /broadcast [សារ]\n\n"
+            "<b>ឧទាហរណ៍:</b>\n"
+            "/broadcast 🔧 បតកំពុងធ្វើថែទាំ 30 នាទី។",
+            parse_mode="HTML"
+        )
+        return
+    
+    try:
+        all_users = await db.users.find({}).to_list(length=None)
+        
+        total = len(all_users)
+        success = 0
+        failed = 0
+        
+        progress_msg = await message.answer(
+            f"📢 <b>កំពុងផ្សាយ...</b>\n"
+            f"សរុប: {total}\n"
+            f"បញ្ជូន: 0",
+            parse_mode="HTML"
+        )
+        
+        for idx, user in enumerate(all_users, 1):
+            user_id = user.get("user_id")
+            
+            try:
+                broadcast_text = (
+                    f"📢 <b>សេចក្តីជូនដំណឹងពីអ្នកគ្រប់គ្រង</b>\n\n"
+                    f"{text}\n\n"
+                    f"<i>នេះជាសារផ្លូវការពីអ្នកគ្រប់គ្រងបត។</i>"
+                )
+                
+                await message.bot.send_message(
+                    chat_id=user_id,
+                    text=broadcast_text,
+                    parse_mode="HTML"
+                )
+                success += 1
+                
+                if idx % 20 == 0:
+                    await asyncio.sleep(1)
+                
+                if idx % 10 == 0 or idx == total:
+                    await progress_msg.edit_text(
+                        f"📢 <b>កំពុងផ្សាយ...</b>\n"
+                        f"សរុប: {total}\n"
+                        f"✅ បញ្ជូន: {success}\n"
+                        f"❌ បរាជ័យ: {failed}\n"
+                        f"ដំណើរការ: {idx}/{total} ({idx*100//total}%)",
+                        parse_mode="HTML"
+                    )
+                
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Failed to send to {user_id}: {e}")
+        
+        await progress_msg.edit_text(
+            f"✅ <b>ផ្សាយរួចរាល់!</b>\n\n"
+            f"📊 សរុប: {total}\n"
+            f"✅ ជោគជ័យ: {success}\n"
+            f"❌ បរាជ័យ: {failed}",
+            parse_mode="HTML"
+        )
+        
+        await send_log(
+            f"📢 Broadcast Sent\n"
+            f"Success: {success}/{total}",
+            bot=message.bot
+        )
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        await message.answer(f"❌ <b>ផ្សាយបរាជ័យ</b>\n\n{escape(str(e))}", parse_mode="HTML")
+
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message):
+    """Admin: View bot statistics."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        stats = await db.count_users()
+        
+        pipeline = [
+            {"$group": {
+                "_id": None,
+                "total_downloads": {"$sum": "$daily_download_count"}
+            }}
+        ]
+        
+        result = await db.users.aggregate(pipeline).to_list(length=1)
+        total_downloads = result[0]["total_downloads"] if result else 0
+        
+        premium_sold = stats['premium']
+        slots_remaining = max(0, 15 - premium_sold)
+        revenue = premium_sold * 1.99
+        potential = slots_remaining * 1.99
+        
+        text = (
+            f"📊 <b>ស្ថិតិបត</b>\n\n"
+            f"👥 អ្នកប្រើសរុប: <b>{stats['total']}</b>\n"
+            f"💎 Premium: <b>{stats['premium']}</b>\n"
+            f"🆓 ឥតគិតថ្លៃ: <b>{stats['free']}</b>\n\n"
+            f"⬇️ ការទាញយកសរុប: <b>{total_downloads}</b>\n"
+            f"📈 មធ្យមក្នុងមួយអ្នក: <b>{total_downloads // stats['total'] if stats['total'] > 0 else 0}</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💰 <b>ការលក់ Lifetime Premium:</b>\n"
+            f"• តម្លៃ: ${1.99:.2f}\n"
+            f"• លក់រួច: <b>{premium_sold}/15</b>\n"
+            f"• នៅសល់: <b>{slots_remaining}/15</b>\n"
+            f"• ប្រាក់ចំណូល: <b>${revenue:.2f}</b>\n"
+            f"• សក្តានុពល: <b>${potential:.2f}</b>\n\n"
+            f"<i>ថ្ងៃទី: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+        )
+        
+        await message.answer(text, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Stats error: {e}")
+        await message.answer(f"❌ មានបញ្ហា: {escape(str(e))}", parse_mode="HTML")
+
+
+@router.message(Command("approve"))
+async def cmd_approve(message: Message):
+    """Admin: Approve premium for user."""
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        target_id = int(message.text.split()[1])
+        success = await db.set_premium(target_id)
+        
+        if success:
+            await message.answer(f"✅ អ្នកប្រើ {target_id} ក្លាយជា PREMIUM ហើយ។")
+            await message.bot.send_message(
+                target_id, 
+                "🎉 <b>អបអរសាទរ!</b> គណនីរបស់អ្នកត្រូវបាន Upgrade ទៅជា PREMIUM ហើយ! 💎", 
+                parse_mode="HTML"
+            )
+            await send_log(
+                f"👮‍♂️ Admin approved Premium for `{target_id}`",
+                bot=message.bot
+            )
+        else:
+            await message.answer("❌ បរាជ័យក្នុងការធ្វើបច្ចុប្បន្នភាពអ្នកប្រើ។ សូមពិនិត្យ ID។")
+    except (IndexError, ValueError):
+        await message.answer("⚠️ របៀបប្រើប្រាស់: /approve [user_id]")
+
+
+# ====== Payment Handlers ======
+
+@router.callback_query(F.data == "buy_premium")
+async def handle_buy_premium(callback: CallbackQuery):
+    """Show payment QR code."""
+    
+    stats = await db.count_users()
+    premium_sold = stats['premium']
+    slots_remaining = max(0, 15 - premium_sold)
+    
+    if slots_remaining == 0:
+        await callback.message.edit_text(
+            "😢 <b>សូមអភ័យទោស! លក់អស់ហើយ!</b>\n\n"
+            "កន្លែងបញ្ចុះតម្លៃទាំង 15 ត្រូវបានទិញអស់ហើយ។\n\n"
+            "💬 សូមទាក់ទងអ្នកគ្រប់គ្រងសម្រាប់តម្លៃធម្មតា ឬការផ្តល់ជូនថ្មី។",
+            parse_mode="HTML"
+        )
+        return
+    
+    payment_qr_path = "payment.jpg"
+    
+    if not os.path.exists(payment_qr_path):
+        await callback.message.edit_text(
+            "❌ <b>រកមិនឃើញកូដ QR ទូទាត់ប្រាក់!</b>\n\n"
+            "សូមទាក់ទងអ្នកគ្រប់គ្រង។",
+            parse_mode="HTML"
+        )
+        logger.error(f"payment.jpg not found!")
+        return
+    
+    payment_caption = (
+        "💳 <b>ទូទាត់ប្រាក់ Premium ពេញមួយជីវិត</b>\n\n"
+        f"💎 <b>ចូលប្រើពេញមួយជីវិត:</b> ${1.99:.2f} (បង់តែម្តង)\n"
+        f"⚡ <b>កន្លែងនៅសល់:</b> {slots_remaining}/15\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📱 <b>របៀបបង់ប្រាក់:</b>\n\n"
+        "1️⃣ ស្កេន QR Code ខាងក្រោម\n"
+        f"2️⃣ បង់ចំនួន <b>${1.99:.2f}</b>\n"
+        "3️⃣ ថតរូបវិក័យបត្រ (Screenshot)\n"
+        "4️⃣ ផ្ញើវិក័យបត្រមកទីនេះវិញ\n"
+        "5️⃣ រង់ចាំអ្នកគ្រប់គ្រងពិនិត្យ និងបើកសិទ្ធិ\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "✅ <b>ពេលវេលាដំណើរការ:</b> ក្នុងរយៈពេល 1 ម៉ោង\n"
+        "♾️ <b>រយៈពេលសុពលភាព:</b> ពេញមួយជីវិត (មិនផុតកំណត់)\n\n"
+        f"🆔 <b>User ID របស់អ្នក:</b> <code>{callback.from_user.id}</code>\n"
+        "<i>(សូមរក្សាទុក ID នេះ)</i>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🎁 <b>អត្ថប្រយោជន៍ Lifetime Premium:</b>\n"
+        "• ទាញយកមិនកំណត់ (ជារៀងរហូត)\n"
+        "• គុណភាព 1080p\n"
+        "• ល្បឿនលឿនបំផុត\n"
+        "• ជំនួយអាទិភាព 24/7\n"
+        "• គ្មានការបង់ប្រាក់ប្រចាំខែ\n"
+        "• បង់តែម្តង ប្រើរហូត! 🚀\n\n"
+        f"⚠️ <b>ប្រញាប់! កន្លែងបញ្ចុះតម្លៃនៅសល់ {slots_remaining} ប៉ុណ្ណោះ!</b>\n\n"
+        "❓ <b>មានសំណួរ?</b> ទាក់ទងអ្នកគ្រប់គ្រងនៅក្នុង Channel"
+    )
+    
+    try:
+        await callback.message.delete()
+        
+        photo = FSInputFile(payment_qr_path)
+        await callback.message.answer_photo(
+            photo=photo,
+            caption=payment_caption,
+            parse_mode="HTML"
+        )
+        
+        await send_log(
+            f"💰 Premium Interest\n"
+            f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)\n"
+            f"Slots: {slots_remaining}/15",
+            bot=callback.bot
+        )
+        
+    except Exception as e:
+        logger.error(f"Error showing QR: {e}")
+        await callback.answer("❌ មានបញ្ហា។ សូមព្យាយាមម្តងទៀត។", show_alert=True)
+
+
+@router.callback_query(F.data == "premium_info")
+async def handle_premium_info(callback: CallbackQuery):
+    """Show premium benefits."""
+    
+    stats = await db.count_users()
+    premium_sold = stats['premium']
+    slots_remaining = max(0, 15 - premium_sold)
+    
+    info_text = (
+        "💎 <b>សមាជិកភាព Premium ពេញមួយជីវិត</b>\n\n"
+        f"💰 <b>តម្លៃ:</b> ~~$3.00~~ → <b>${1.99:.2f}</b>\n"
+        f"⚡ <b>កន្លែងនៅសល់:</b> {slots_remaining}/15\n"
+        f"📊 <b>លក់រួច:</b> {premium_sold}/15\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>📥 ការទាញយក:</b>\n"
+        "✅ ទាញយកមិនកំណត់ជារៀងរហូត\n"
+        "✅ គ្មានការកំណត់ប្រចាំថ្ងៃ/ខែ\n"
+        "✅ គាំទ្រគ្រប់វេទិកា\n"
+        "✅ គុណភាពខ្ពស់ (រហូតដល់ 1080p)\n\n"
+        "<b>⚡ ប្រតិបត្តិការ:</b>\n"
+        "🚀 ជួរអាទិភាពក្នុងការទាញយក\n"
+        "🚀 ល្បឿនទាញយកលឿនបំផុត\n"
+        "🚀 ទាញយកច្រើនក្នុងពេលដំណាលគ្នា\n\n"
+        "<b>🎯 ជំនួយ:</b>\n"
+        "💬 ជំនួយអតិថិជនអាទិភាព\n"
+        "💬 ទាក់ទងផ្ទាល់ជាមួយអ្នកគ្រប់គ្រង\n"
+        "💬 ជំនួយ 24/7\n\n"
+        "<b>🎨 មុខងារ:</b>\n"
+        "✨ គ្មានការផ្សាយពាណិជ្ជកម្ម\n"
+        "✨ ចូលប្រើមុខងារថ្មីមុនគេ\n"
+        "✨ ការកំណត់ផ្ទាល់ខ្លួន\n"
+        "✨ ចូលប្រើពេញមួយជីវិត (មិនផុតកំណត់)\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💵 <b>ទូទាត់តែម្តង:</b>\n"
+        f"• បង់ <b>${1.99:.2f}</b> តែម្តង\n"
+        "• ប្រើរហូត\n"
+        "• គ្មានការបង់ប្រចាំខែ\n"
+        "• គ្មានការគិតថ្លៃលាក់\n\n"
+        f"⚠️ <b>ការផ្តល់ជូនមានកំណត់:</b> នៅសល់ {slots_remaining} កន្លែង!\n\n"
+        "<i>បន្ទាប់ពីលក់ 15 ហើយ តម្លៃនឹងត្រឡប់ទៅ $3.00</i>"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"💳 ទិញឥឡូវនេះ - ${1.99:.2f} ({slots_remaining} left)",
+            callback_data="buy_premium"
+        )],
+        [InlineKeyboardButton(
+            text="❌ បិទ",
+            callback_data="close_info"
+        )]
+    ])
+    
+    await callback.message.edit_text(info_text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "close_info")
+async def handle_close_info(callback: CallbackQuery):
+    """Close info message."""
+    await callback.message.delete()
+
+
 @router.message(F.photo)
 async def handle_receipt(message: Message):
+    """Handle payment receipt."""
     caption = escape(message.caption or "No caption")
     user_name = escape(message.from_user.full_name)
     user_info = f"User: {user_name} (<code>{message.from_user.id}</code>)"
@@ -956,12 +963,12 @@ async def handle_receipt(message: Message):
     await message.bot.send_photo(
         chat_id=LOG_CHANNEL_ID,
         photo=message.photo[-1].file_id,
-        caption=f"🧾 <b>Payment Receipt Received</b>\n\n{user_info}\n📝 Note: {caption}\n\n👉 Use <code>/approve {message.from_user.id}</code> to confirm.",
+        caption=f"🧾 <b>ទទួលបានវិក័យបត្រទូទាត់ប្រាក់</b>\n\n{user_info}\n📝 ចំណាំ: {caption}\n\n👉 ប្រើ <code>/approve {message.from_user.id}</code> ដើម្បីអនុម័ត។",
         parse_mode="HTML"
     )
     
     await message.answer(
         "✅ <b>ទទួលវិក័យបត្ររួចរាល់!</b>\n"
-        "យើងនឹងពិនិត្យហើយ upgrade គណនីរបស់អ្នកក្នុងពេលឆាប់ៗ។",
+        "យើងនឹងពិនិត្យ និង upgrade គណនីរបស់អ្នកក្នុងពេលឆាប់ៗ។",
         parse_mode="HTML"
     )

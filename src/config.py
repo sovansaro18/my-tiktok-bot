@@ -12,26 +12,52 @@ LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 PORT_STR = os.getenv("PORT", "10000")
 
 
+# ====== Business Logic Constants ======
+# Premium pricing
+PREMIUM_PRICE = 1.99  # USD
+PREMIUM_ORIGINAL_PRICE = 3.00  # USD
+PREMIUM_DISCOUNT_SLOTS = 15  # Total discount slots available
+
+# Free user limits
+FREE_TRIAL_DAYS = 7  # Trial period in days
+FREE_DAILY_LIMIT = 2  # Downloads per day after trial
+FREE_MAX_QUALITY = "480p"  # Maximum quality for free users
+
+# Premium benefits
+PREMIUM_MAX_QUALITY = "1080p"
+
+# File constraints
+MAX_FILE_SIZE = 49 * 1024 * 1024  # 49MB (Telegram limit is 50MB, we use 49 for safety)
+MAX_URL_LENGTH = 2048
+DOWNLOAD_TIMEOUT = 300  # 5 minutes in seconds
+
+# Rate limiting
+RATE_LIMIT_REQUESTS = 3  # Number of requests
+RATE_LIMIT_WINDOW = 10  # Time window in seconds
+
+# Supported platforms
+SUPPORTED_PLATFORMS = [
+    'youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com',
+    'tiktok.com', 'www.tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com',
+    'facebook.com', 'www.facebook.com', 'fb.watch', 'm.facebook.com',
+    'instagram.com', 'www.instagram.com',
+    'pinterest.com', 'www.pinterest.com', 'pin.it',
+]
+
+
 # ====== Validation Functions ======
 def validate_bot_token(token: str) -> bool:
-    """
-    Validate Telegram Bot Token format.
-    Format: {number}:{alphanumeric-string}
-    """
+    """Validate Telegram Bot Token format."""
     if not token:
         return False
-    # Telegram bot token format: digits:alphanumeric_with_dashes
     pattern = r'^\d+:[A-Za-z0-9_-]+$'
     return bool(re.match(pattern, token))
 
 
 def validate_mongo_uri(uri: str) -> bool:
-    """
-    Validate MongoDB URI format (basic check).
-    """
+    """Validate MongoDB URI format (basic check)."""
     if not uri:
         return False
-    # Basic check for MongoDB URI formats
     valid_prefixes = ['mongodb://', 'mongodb+srv://']
     return any(uri.startswith(prefix) for prefix in valid_prefixes)
 
@@ -78,8 +104,18 @@ if not LOG_CHANNEL_ID:
         "Please add your Telegram channel ID for logging."
     )
 
-# Try to parse LOG_CHANNEL_ID (can be negative for channels)
 try:
     LOG_CHANNEL_ID = int(LOG_CHANNEL_ID)
 except ValueError:
     raise ValueError("❌ LOG_CHANNEL_ID must be a valid integer (channel ID)!")
+
+
+# ====== Helper Functions ======
+def get_discount_percentage() -> int:
+    """Calculate discount percentage."""
+    return int(((PREMIUM_ORIGINAL_PRICE - PREMIUM_PRICE) / PREMIUM_ORIGINAL_PRICE) * 100)
+
+
+def format_price(price: float) -> str:
+    """Format price consistently."""
+    return f"${price:.2f}"
