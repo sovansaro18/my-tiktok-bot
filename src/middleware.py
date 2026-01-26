@@ -6,8 +6,7 @@ from aiogram.types import Message
 
 logger = logging.getLogger(__name__)
 
-# Rate limit message cooldown to avoid spamming the user
-RATE_LIMIT_MESSAGE_COOLDOWN = 30  # seconds
+from src.config import RATE_LIMIT_MESSAGE_COOLDOWN
 
 
 class RateLimitMiddleware(BaseMiddleware):
@@ -83,10 +82,10 @@ class RateLimitMiddleware(BaseMiddleware):
                 try:
                     wait_time = int(self.window - (current_time - min(self.user_requests[user_id])))
                     await event.answer(
-                        f"⏳ <b>Slow down!</b>\n\n"
-                        f"You're sending messages too fast.\n"
-                        f"Please wait <b>{max(1, wait_time)} seconds</b> before trying again.",
-                        parse_mode="HTML"
+                        f"⏳ <b>សូមបន្តិច...</b>\n\n"
+                        f"អ្នកកំពុងផ្ញើសារលឿនពេក។\n"
+                        f"សូមរង់ចាំ <b>{max(1, wait_time)} វិនាទី</b> មុនព្យាយាមម្តងទៀត។",
+                        parse_mode="HTML",
                     )
                     self.last_rate_limit_message[user_id] = current_time
                 except Exception as e:

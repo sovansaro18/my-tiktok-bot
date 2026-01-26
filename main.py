@@ -8,8 +8,9 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 
-from src.config import BOT_TOKEN, PORT
+from src.config import BOT_TOKEN, PORT, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
 from src.handlers import router
 from src.middleware import RateLimitMiddleware
 from src.database import db
@@ -138,10 +139,18 @@ async def main() -> None:
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
+
+    await _bot.set_my_commands(
+        [
+            BotCommand(command="start", description="ចាប់ផ្តើម"),
+            BotCommand(command="plan", description="គម្រោង"),
+            BotCommand(command="report", description="ជូនដំណឹង"),
+        ]
+    )
     
     # Initialize dispatcher
     _dp = Dispatcher()
-    _dp.message.middleware(RateLimitMiddleware(limit=3, window=10))
+    _dp.message.middleware(RateLimitMiddleware(limit=RATE_LIMIT_REQUESTS, window=RATE_LIMIT_WINDOW))
     _dp.include_router(router)
     
     # Start web server

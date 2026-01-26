@@ -9,19 +9,17 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 ADMIN_ID = os.getenv("ADMIN_ID")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
+REPORT_CHANNEL_ID_STR = os.getenv("REPORT_CHANNEL_ID", "-1003569125986")
 PORT_STR = os.getenv("PORT", "10000")
 
 
 # ====== Business Logic Constants ======
 # Premium pricing
-PREMIUM_PRICE = 1.99  # USD
-PREMIUM_ORIGINAL_PRICE = 3.00  # USD
-PREMIUM_DISCOUNT_SLOTS = 15  # Total discount slots available
+PREMIUM_PRICE = 3.00
 
 # Free user limits
-FREE_TRIAL_DAYS = 7  # Trial period in days
-FREE_DAILY_LIMIT = 2  # Downloads per day after trial
-FREE_MAX_QUALITY = "480p"  # Maximum quality for free users
+FREE_DAILY_LIMIT = 2
+FREE_MAX_QUALITY = "480p"
 
 # Premium benefits
 PREMIUM_MAX_QUALITY = "1080p"
@@ -31,18 +29,27 @@ MAX_FILE_SIZE = 49 * 1024 * 1024  # 49MB (Telegram limit is 50MB, we use 49 for 
 MAX_URL_LENGTH = 2048
 DOWNLOAD_TIMEOUT = 300  # 5 minutes in seconds
 
+# URL allowlist (base domains; subdomains allowed)
+ALLOWED_DOMAINS = (
+    "youtube.com",
+    "youtu.be",
+    "tiktok.com",
+    "vt.tiktok.com",
+    "vm.tiktok.com",
+    "facebook.com",
+    "fb.watch",
+    "instagram.com",
+    "pinterest.com",
+    "pin.it",
+)
+
 # Rate limiting
 RATE_LIMIT_REQUESTS = 3  # Number of requests
 RATE_LIMIT_WINDOW = 10  # Time window in seconds
 
-# Supported platforms
-SUPPORTED_PLATFORMS = [
-    'youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com',
-    'tiktok.com', 'www.tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com',
-    'facebook.com', 'www.facebook.com', 'fb.watch', 'm.facebook.com',
-    'instagram.com', 'www.instagram.com',
-    'pinterest.com', 'www.pinterest.com', 'pin.it',
-]
+RATE_LIMIT_MESSAGE_COOLDOWN = 30
+
+SUPPORTED_PLATFORMS = list(ALLOWED_DOMAINS)
 
 
 # ====== Validation Functions ======
@@ -63,10 +70,10 @@ def validate_mongo_uri(uri: str) -> bool:
 
 
 # ====== Validate Required Fields ======
-if not all([BOT_TOKEN, MONGO_URI, ADMIN_ID]):
+if not all([BOT_TOKEN, ADMIN_ID]):
     raise ValueError(
         "❌ Missing required environment variables!\n"
-        "Please check your .env file has: BOT_TOKEN, MONGO_URI, ADMIN_ID"
+        "Please check your .env file has: BOT_TOKEN, ADMIN_ID"
     )
 
 # ====== Validate BOT_TOKEN Format ======
@@ -76,8 +83,8 @@ if not validate_bot_token(BOT_TOKEN):
         "Expected format: 123456789:ABCdefGHI-jklMNOpqr_stuvWXYZ"
     )
 
-# ====== Validate MONGO_URI Format ======
-if not validate_mongo_uri(MONGO_URI):
+# ====== Validate MONGO_URI Format (Optional) ======
+if MONGO_URI and not validate_mongo_uri(MONGO_URI):
     raise ValueError(
         "❌ Invalid MONGO_URI format!\n"
         "Expected: mongodb:// or mongodb+srv:// URI"
@@ -97,25 +104,23 @@ try:
 except ValueError:
     raise ValueError(f"❌ PORT must be a valid integer between 1-65535, got: {PORT_STR}")
 
-# ====== Validate LOG_CHANNEL_ID ======
-if not LOG_CHANNEL_ID:
-    raise ValueError(
-        "❌ Missing LOG_CHANNEL_ID in .env!\n"
-        "Please add your Telegram channel ID for logging."
-    )
+# ====== Parse LOG_CHANNEL_ID (Optional) ======
+if LOG_CHANNEL_ID:
+    try:
+        LOG_CHANNEL_ID = int(LOG_CHANNEL_ID)
+    except ValueError:
+        raise ValueError("❌ LOG_CHANNEL_ID must be a valid integer (channel ID)!")
+else:
+    LOG_CHANNEL_ID = None
 
+# ====== Parse REPORT_CHANNEL_ID ======
 try:
-    LOG_CHANNEL_ID = int(LOG_CHANNEL_ID)
+    REPORT_CHANNEL_ID = int(REPORT_CHANNEL_ID_STR)
 except ValueError:
-    raise ValueError("❌ LOG_CHANNEL_ID must be a valid integer (channel ID)!")
+    raise ValueError("❌ REPORT_CHANNEL_ID must be a valid integer (channel ID)!")
 
 
 # ====== Helper Functions ======
-def get_discount_percentage() -> int:
-    """Calculate discount percentage."""
-    return int(((PREMIUM_ORIGINAL_PRICE - PREMIUM_PRICE) / PREMIUM_ORIGINAL_PRICE) * 100)
-
-
 def format_price(price: float) -> str:
     """Format price consistently."""
     return f"${price:.2f}"
