@@ -20,9 +20,11 @@ from src.downloader import downloader
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    stream=sys.stdout
+    stream=sys.stdout,
+    force=True,
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("aiogram").setLevel(logging.INFO)
 
 # ====== Global State for Cleanup ======
 _bot: Optional[Bot] = None

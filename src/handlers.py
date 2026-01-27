@@ -404,19 +404,48 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
 
     download_type = "audio" if callback.data == "fmt_audio" else "video"
     
+    await callback.answer()
+
     progress_msg = await callback.message.edit_text(
         f"⏳ <b>កំពុងទាញយក {download_type.upper()}...</b>\n"
         f"<i>សូមរង់ចាំបន្តិច...</i>",
         parse_mode="HTML"
     )
+
+    logger.info(
+        "download_start user_id=%s type=%s url=%s",
+        callback.from_user.id,
+        download_type,
+        url,
+    )
+
+    started_at = asyncio.get_running_loop().time()
+    stop_event = asyncio.Event()
+
+    async def _keepalive() -> None:
+        while not stop_event.is_set():
+            await asyncio.sleep(20)
+            if stop_event.is_set():
+                break
+            elapsed = int(asyncio.get_running_loop().time() - started_at)
+            try:
+                await progress_msg.edit_text(
+                    f"⏳ <b>កំពុងទាញយក {download_type.upper()}...</b>\n"
+                    f"<i>សូមរង់ចាំបន្តិច... ({elapsed}s)</i>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+    keepalive_task = asyncio.create_task(_keepalive())
     
     # Download with timeout
     try:
-        result = await asyncio.wait_for(
-            downloader.download(url, type=download_type),
-            timeout=DOWNLOAD_TIMEOUT
-        )
+        dl_task = asyncio.create_task(downloader.download(url, type=download_type))
+        result = await asyncio.wait_for(dl_task, timeout=DOWNLOAD_TIMEOUT)
     except asyncio.TimeoutError:
+        stop_event.set()
+        keepalive_task.cancel()
         logger.warning(f"Download timeout for URL: {url}")
         await progress_msg.edit_text(
             "❌ <b>ការទាញយកយូរពេកហើយ</b>\n\n"
@@ -432,7 +461,28 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         )
         await state.clear()
         return
-    
+    except Exception as e:
+        stop_event.set()
+        keepalive_task.cancel()
+        logger.error("Download task crashed: %s", e, exc_info=True)
+        await progress_msg.edit_text(
+            "❌ <b>ប្រព័ន្ធមានបញ្ហា</b>\n\nសូមព្យាយាមម្ដងទៀត។",
+            parse_mode="HTML",
+        )
+        await send_log(
+            f"❌ Download Crash\n"
+            f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)\n"
+            f"URL: {url}\n"
+            f"Type: {download_type}\n"
+            f"Error: {str(e)[:200]}",
+            bot=callback.bot,
+        )
+        await state.clear()
+        return
+
+    stop_event.set()
+    keepalive_task.cancel()
+
     # Handle download errors
     if result["status"] == "error":
         safe_message = escape(result.get('message', 'Unknown error'))
