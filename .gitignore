@@ -1,6 +1,7 @@
 # 1. ការពារសុវត្ថិភាព (សំខាន់បំផុត!)
 .env
 .env.local
+cookies.txt
 
 # 2. មិនឱ្យជាប់ Folder Library (ធ្ងន់ណាស់ កុំ Push ទៅ)
 venv/
@@ -21,3 +22,7 @@ downloads/
 .DS_Store
 Thumbs.db
 Notifications.txt
+
+# 6. IDE / tooling
+.vscode/
+.cursor/

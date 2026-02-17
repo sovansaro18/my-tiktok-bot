@@ -31,6 +31,98 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
+def friendly_download_error(url: str, err: str) -> str:
+    """Map raw downloader errors to user-friendly Khmer messages (all platforms)."""
+    u = (url or "").lower()
+    e = (err or "").lower()
+
+    def platform_name() -> str:
+        if "tiktok.com" in u:
+            return "TikTok"
+        if "youtube.com" in u or "youtu.be" in u:
+            return "YouTube"
+        if "facebook.com" in u or "fb.watch" in u:
+            return "Facebook"
+        if "instagram.com" in u:
+            return "Instagram"
+        if "pinterest" in u or "pin.it" in u:
+            return "Pinterest"
+        return "វេទិកា"
+
+    plat = platform_name()
+
+    privacy_markers = (
+        "cannot download this facebook video",
+        "private",
+        "friends-only",
+        "members",
+        "group",
+        "this content isn't available",
+        "content isn't available",
+        "not available",
+        "video unavailable",
+        "unavailable",
+        "has been removed",
+        "deleted",
+    )
+    login_markers = (
+        "login",
+        "sign in",
+        "need cookies",
+        "cookies.txt",
+        "confirm your age",
+        "age-restricted",
+    )
+    geo_markers = (
+        "not available in your country",
+        "regional",
+        "geo",
+        "country",
+        "location",
+    )
+    copyright_markers = (
+        "copyright",
+        "claimed",
+        "blocked",
+    )
+
+    if any(m in e for m in privacy_markers):
+        return (
+            "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
+            "នេះជាវីដេអូ <b>Private</b> (ឬ Friends-only/Group-private) ហើយ <b>ខុសគោលការណ៍របស់ Bot</b> "
+            "ដូច្នេះ Bot <b>មិនអាចទាញយកបាន</b>។\n\n"
+            f"✅ សូមផ្ញើ Link វីដេអូដែលជា <b>Public</b> ពី {plat} មកវិញ។"
+        )
+
+    if any(m in e for m in login_markers):
+        return (
+            "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
+            f"វីដេអូនេះមានការកំណត់ <b>Age-restricted/Login required</b> ពី {plat}។ "
+            "Bot មិនអាចទាញយកវីដេអូប្រភេទនេះបានទេ។\n\n"
+            "✅ សូមសាកល្បងវីដេអូ <b>Public</b> ផ្សេង ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+        )
+
+    if any(m in e for m in geo_markers):
+        return (
+            "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
+            f"វីដេអូនេះអាចមានការកំណត់ <b>តំបន់/ប្រទេស</b> ពី {plat}។\n\n"
+            "✅ សូមសាកល្បង Link ផ្សេង ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+        )
+
+    if any(m in e for m in copyright_markers):
+        return (
+            "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
+            "វីដេអូនេះអាចជាវីដេអូដែលមាន <b>Copyright/Blocked</b> ហើយស្ថិតក្រៅគោលការណ៍ Bot។\n\n"
+            "✅ សូមសាកល្បង Link ផ្សេង។"
+        )
+
+    return (
+        "❌ <b>មានបញ្ហាក្នុងការទាញយក</b>\n\n"
+        "សូមព្យាយាមម្តងទៀត ឬផ្ញើ Link ផ្សេង។ "
+        "បើបញ្ហានេះកើតឡើងជាបន្តបន្ទាប់ សូមប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+    )
+
+
 def premium_buy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -376,7 +468,7 @@ async def handle_link(message: Message, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"),
-            InlineKeyboardButton(text="🎵 អូឌីយ៉ូ (M4A)", callback_data="fmt_audio")
+            InlineKeyboardButton(text="🎵 អូឌីយ៉ូ (MP3)", callback_data="fmt_audio")
         ]
     ])
     
@@ -404,48 +496,19 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
 
     download_type = "audio" if callback.data == "fmt_audio" else "video"
     
-    await callback.answer()
-
     progress_msg = await callback.message.edit_text(
         f"⏳ <b>កំពុងទាញយក {download_type.upper()}...</b>\n"
         f"<i>សូមរង់ចាំបន្តិច...</i>",
         parse_mode="HTML"
     )
-
-    logger.info(
-        "download_start user_id=%s type=%s url=%s",
-        callback.from_user.id,
-        download_type,
-        url,
-    )
-
-    started_at = asyncio.get_running_loop().time()
-    stop_event = asyncio.Event()
-
-    async def _keepalive() -> None:
-        while not stop_event.is_set():
-            await asyncio.sleep(20)
-            if stop_event.is_set():
-                break
-            elapsed = int(asyncio.get_running_loop().time() - started_at)
-            try:
-                await progress_msg.edit_text(
-                    f"⏳ <b>កំពុងទាញយក {download_type.upper()}...</b>\n"
-                    f"<i>សូមរង់ចាំបន្តិច... ({elapsed}s)</i>",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
-
-    keepalive_task = asyncio.create_task(_keepalive())
     
     # Download with timeout
     try:
-        dl_task = asyncio.create_task(downloader.download(url, type=download_type))
-        result = await asyncio.wait_for(dl_task, timeout=DOWNLOAD_TIMEOUT)
+        result = await asyncio.wait_for(
+            downloader.download(url, type=download_type),
+            timeout=DOWNLOAD_TIMEOUT
+        )
     except asyncio.TimeoutError:
-        stop_event.set()
-        keepalive_task.cancel()
         logger.warning(f"Download timeout for URL: {url}")
         await progress_msg.edit_text(
             "❌ <b>ការទាញយកយូរពេកហើយ</b>\n\n"
@@ -461,41 +524,95 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         )
         await state.clear()
         return
-    except Exception as e:
-        stop_event.set()
-        keepalive_task.cancel()
-        logger.error("Download task crashed: %s", e, exc_info=True)
-        await progress_msg.edit_text(
-            "❌ <b>ប្រព័ន្ធមានបញ្ហា</b>\n\nសូមព្យាយាមម្ដងទៀត។",
-            parse_mode="HTML",
-        )
-        await send_log(
-            f"❌ Download Crash\n"
-            f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)\n"
-            f"URL: {url}\n"
-            f"Type: {download_type}\n"
-            f"Error: {str(e)[:200]}",
-            bot=callback.bot,
-        )
-        await state.clear()
-        return
-
-    stop_event.set()
-    keepalive_task.cancel()
-
+    
     # Handle download errors
     if result["status"] == "error":
-        safe_message = escape(result.get('message', 'Unknown error'))
-        await progress_msg.edit_text(f"❌ <b>មានបញ្ហា:</b> {safe_message}", parse_mode="HTML")
+        raw_error = str(result.get("message", "Unknown error"))
+        user_message = friendly_download_error(url, raw_error)
+        await progress_msg.edit_text(user_message, parse_mode="HTML")
         
         await send_log(
             f"❌ Download Error\n"
             f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)\n"
             f"URL: {url}\n"
             f"Type: {download_type}\n"
-            f"Error: {result.get('message', 'Unknown')}",
+            f"Error: {raw_error}",
             bot=callback.bot
         )
+        await state.clear()
+        return
+
+    # TikTok photo/slideshow (auto-detected by downloader)
+    if result.get("media_kind") == "slideshow" and isinstance(result.get("file_paths"), list):
+        await progress_msg.edit_text("📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
+
+        from aiogram.types import InputMediaPhoto
+
+        paths = [p for p in result.get("file_paths") if isinstance(p, str) and os.path.exists(p)]
+        if not paths:
+            await progress_msg.edit_text("❌ <b>មិនអាចរកឃើញរូបភាពបានទេ</b>", parse_mode="HTML")
+            await state.clear()
+            return
+
+        safe_title = escape(str(result.get('title', 'TikTok Photo')))
+        caption = (
+            f"✅ <b>ទាញយករួចរាល់!</b>\n"
+            f"📌 ចំណងជើង: {safe_title}\n"
+            f"🤖 តាមរយៈ @ravi_downloader_bot"
+        )
+
+        # Telegram media groups support up to 10 items per group
+        chunk_size = 10
+        for i in range(0, len(paths), chunk_size):
+            chunk = paths[i:i + chunk_size]
+            media = []
+            for j, p in enumerate(chunk):
+                media.append(
+                    InputMediaPhoto(
+                        media=FSInputFile(p),
+                        caption=(caption if i == 0 and j == 0 else None),
+                        parse_mode=("HTML" if i == 0 and j == 0 else None),
+                    )
+                )
+            await callback.message.answer_media_group(media)
+
+        # Cleanup messages
+        chat_id = callback.message.chat.id
+        if url_message_id:
+            await safe_delete_message(callback.bot, chat_id, url_message_id)
+        if format_message_id:
+            await safe_delete_message(callback.bot, chat_id, format_message_id)
+        try:
+            await progress_msg.delete()
+        except Exception:
+            pass
+
+        # Update usage
+        user_id = callback.from_user.id
+        user_data, _ = await db.get_user(user_id)
+        if user_data.get("status") != "premium":
+            updated_user_data = await db.record_download(user_id)
+            notification = get_usage_notification(updated_user_data)
+        else:
+            notification = get_usage_notification(user_data)
+
+        await callback.message.answer(
+            notification["text"],
+            parse_mode="HTML",
+            reply_markup=notification["keyboard"],
+        )
+
+        # Remove files
+        for p in paths:
+            await safe_remove_file(p)
+        # Try remove folder if empty
+        try:
+            folder = os.path.dirname(paths[0])
+            if folder and os.path.isdir(folder) and not os.listdir(folder):
+                os.rmdir(folder)
+        except Exception:
+            pass
+
         await state.clear()
         return
 

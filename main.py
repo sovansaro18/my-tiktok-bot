@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import signal
 import sys
 from typing import Optional
@@ -17,14 +18,14 @@ from src.database import db
 from src.downloader import downloader
 
 # ====== Logging Configuration ======
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _log_level, logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     stream=sys.stdout,
-    force=True,
+    force=True
 )
 logger = logging.getLogger(__name__)
-logging.getLogger("aiogram").setLevel(logging.INFO)
 
 # ====== Global State for Cleanup ======
 _bot: Optional[Bot] = None

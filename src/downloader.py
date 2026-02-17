@@ -8,8 +8,7 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 import yt_dlp
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Optional, Any
-from asyncio.subprocess import PIPE
+from typing import Dict, Optional, Any, List
 
 from src.config import MAX_FILE_SIZE
 
@@ -19,7 +18,13 @@ DOWNLOAD_DIR = "downloads"
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-COOKIES_FILE = os.getenv("COOKIES_FILE", "cookies.txt")
+COOKIES_FILE = (
+    os.getenv("YTDLP_COOKIES")
+    or os.getenv("COOKIES_FILE")
+    or "cookies.txt"
+)
+
+IMAGE_EXTS = {"jpg", "jpeg", "png", "webp"}
 
 
 class Downloader:
@@ -60,10 +65,6 @@ class Downloader:
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.max_retries = 3
         self._shutdown = False
-
-        # When running on PaaS (Render/Heroku/etc.), yt-dlp can occasionally hang inside
-        # the Python API due to network stalls. The CLI subprocess can be hard-killed on timeout.
-        self.use_cli = os.getenv("YTDLP_USE_CLI", "1") == "1"
 
     def shutdown(self, wait: bool = True) -> None:
         if not self._shutdown:
@@ -331,10 +332,12 @@ class Downloader:
         if download_type == "audio":
             common_opts.update({
                 'format': 'bestaudio/best',
-                'postprocessors': [{
+                'postprocessors': ([{
                     'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'm4a',
-                }] if not check_only else []
+                    # mp3 tends to be the most compatible with Telegram audio
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }] if not check_only else [])
             })
         elif platform == 'youtube':
             common_opts['format'] = (
@@ -392,6 +395,11 @@ class Downloader:
                 # If size check fails, allow download (will be caught later)
                 return {"status": "ok", "size": None}
 
+    def _probe_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Lightweight extractor probe (download=False)."""
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
     def _download_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
         """Synchronous yt-dlp download (runs in thread pool)."""
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -409,7 +417,12 @@ class Downloader:
                 
                 if opts.get('postprocessors'):
                     base, _ = os.path.splitext(filename)
-                    filename = f"{base}.m4a"
+                    try:
+                        pp = (opts.get('postprocessors') or [])[0] or {}
+                        ext = (pp.get('preferredcodec') or 'mp3').strip().lower()
+                    except Exception:
+                        ext = 'mp3'
+                    filename = f"{base}.{ext}"
 
                 if not os.path.exists(filename):
                     return {"status": "error", "message": "File not found after download"}
@@ -448,157 +461,96 @@ class Downloader:
                 logger.error(f"❌ Error: {e}", exc_info=True)
                 return {"status": "error", "message": f"Error: {str(e)[:200]}"}
 
-    def _build_cli_args(self, url: str, download_type: str, outtmpl: str, ua: str, yt_clients: Optional[list[str]] = None) -> list[str]:
-        args: list[str] = [
-            "yt-dlp",
-            "--no-playlist",
-            "--no-progress",
-            "--newline",
-            "--force-ipv4",
-            "--socket-timeout", "30",
-            "--retries", "10",
-            "--fragment-retries", "10",
-            "--max-filesize", str(MAX_FILE_SIZE),
-            "-o", outtmpl,
-            "--print", "after_move:filepath",
-            "--user-agent", ua,
-        ]
+    def _is_slideshow_info(self, info: Dict[str, Any]) -> bool:
+        """Return True if yt-dlp extracted info looks like a TikTok photo/slideshow."""
+        if not isinstance(info, dict):
+            return False
 
-        if COOKIES_FILE and os.path.exists(COOKIES_FILE):
-            args += ["--cookies", COOKIES_FILE]
+        # Playlist-like entries that are images.
+        if info.get('_type') == 'playlist' and isinstance(info.get('entries'), list):
+            for e in info.get('entries') or []:
+                if not isinstance(e, dict):
+                    continue
+                ext = (e.get('ext') or '').lower()
+                if ext in IMAGE_EXTS:
+                    return True
+                url = e.get('url')
+                if isinstance(url, str) and any(url.lower().endswith('.' + x) for x in IMAGE_EXTS):
+                    return True
 
-        platform = self._detect_platform(url)
-        if platform == "youtube" and yt_clients:
-            # Example: youtube:player_client=tv,android_sdkless,web_safari
-            args += ["--extractor-args", f"youtube:player_client={','.join(yt_clients)}"]
+        # Sometimes direct info has image ext.
+        ext = (info.get('ext') or '').lower()
+        if ext in IMAGE_EXTS:
+            return True
 
-        if download_type == "audio":
-            args += [
-                "-f", "bestaudio/best",
-                "-x",
-                "--audio-format", "m4a",
-            ]
-        else:
-            # Keep it simple & robust; prefer mp4.
-            args += [
-                "-f",
-                "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[ext=mp4]/best",
-                "--merge-output-format", "mp4",
-            ]
+        return False
 
-        args.append(url)
-        return args
+    def _download_tiktok_slideshow_sync(self, url: str, base_opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Download TikTok photo/slideshow as a set of image files."""
+        # Put each slideshow into its own folder
+        folder = os.path.join(DOWNLOAD_DIR, f"tiktok_slideshow_{uuid.uuid4().hex}")
+        os.makedirs(folder, exist_ok=True)
 
-    async def _run_cli(self, args: list[str], timeout: int) -> tuple[int, str, str]:
-        proc = await asyncio.create_subprocess_exec(*args, stdout=PIPE, stderr=PIPE)
-        try:
-            out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                await proc.communicate()
-            except Exception:
-                pass
-            raise
-        return proc.returncode or 0, (out_b or b"").decode(errors="ignore"), (err_b or b"").decode(errors="ignore")
+        opts = dict(base_opts)
+        opts.update({
+            'noplaylist': False,
+            'outtmpl': os.path.join(folder, '%(title).80s_%(playlist_index)02d.%(ext)s'),
+            # slideshow posts may have many entries
+            'playlist_items': '1-50',
+        })
 
-    def _best_existing_file(self, base_dir: str) -> Optional[str]:
-        try:
-            files = [
-                os.path.join(base_dir, f)
-                for f in os.listdir(base_dir)
-                if os.path.isfile(os.path.join(base_dir, f))
-            ]
-            if not files:
-                return None
-            files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-            return files[0]
-        except Exception:
-            return None
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            title = 'TikTok Photo'
+            duration = 0
+            if isinstance(info, dict):
+                title = info.get('title') or title
+                duration = info.get('duration') or 0
 
-    async def download_with_ytdlp_cli(self, url: str, download_type: str = "video") -> Dict[str, Any]:
-        # Normalize some URLs first
-        if self._detect_platform(url) == "youtube":
-            url = self._normalize_youtube_url(url)
+        # Collect downloaded images
+        files: list[str] = []
+        for name in sorted(os.listdir(folder)):
+            ext = os.path.splitext(name)[1].lstrip('.').lower()
+            if ext in IMAGE_EXTS:
+                files.append(os.path.join(folder, name))
 
-        # Per-attempt settings
-        clients_rotation = [
-            ["tv", "android_sdkless", "web_safari"],
-            ["android_sdkless", "tv", "ios"],
-            ["ios", "android_sdkless", "tv"],
-        ]
+        if not files:
+            return {"status": "error", "message": "No images found for this TikTok link"}
 
-        for attempt in range(1, self.max_retries + 1):
-            ua = self.USER_AGENTS[(attempt - 1) % len(self.USER_AGENTS)]
-            yt_clients = None
-            if self._detect_platform(url) == "youtube":
-                yt_clients = clients_rotation[(attempt - 1) % len(clients_rotation)]
-
-            file_id = uuid.uuid4().hex
-            outtmpl = os.path.join(DOWNLOAD_DIR, f"{file_id}.%(ext)s")
-            args = self._build_cli_args(url, download_type, outtmpl, ua, yt_clients=yt_clients)
-
-            try:
-                logger.info(f"⬇️ yt-dlp(cli) [Attempt {attempt}/{self.max_retries}] platform={self._detect_platform(url)}")
-                rc, out, err = await self._run_cli(args, timeout=120)
-
-                # ytdlp prints final filepath on stdout via --print. Last non-empty line is best.
-                printed = ""
-                for line in (out or "").splitlines()[::-1]:
-                    line = line.strip()
-                    if line:
-                        printed = line
-                        break
-
-                file_path = printed if printed and os.path.exists(printed) else self._best_existing_file(DOWNLOAD_DIR)
-
-                if rc == 0 and file_path and os.path.exists(file_path):
-                    return {
-                        "status": "success",
-                        "file_path": file_path,
-                        "title": "Unknown",
-                        "duration": 0,
-                        "uploader": "Unknown",
-                    }
-
-                msg = (err or out or "").strip()
-                msg = msg[-500:] if msg else "Download failed"
-
-                # Normalize common errors for user-friendly messages
-                low = msg.lower()
-                if "sign in" in low or "age-restricted" in low or "cookies" in low:
-                    return {"status": "error", "message": "Age-restricted. Need cookies.txt"}
-                if "file is larger" in low or "max-filesize" in low or "too large" in low:
-                    return {"status": "error", "message": "File too large (>49MB)"}
-                if "failed to extract" in low and "player" in low:
-                    return {"status": "error", "message": "YouTube បានប្តូររចនាសម្ព័ន្ធ។ សូមព្យាយាមម្ដងទៀតក្រោយ។"}
-
-                logger.warning(f"⚠️ yt-dlp(cli) attempt {attempt} failed: {msg[:200]}")
-
-            except asyncio.TimeoutError:
-                logger.warning(f"⏱ yt-dlp(cli) timeout attempt {attempt} url={url}")
-            except Exception as e:
-                logger.error(f"❌ yt-dlp(cli) error attempt {attempt}: {e}")
-
-            if attempt < self.max_retries:
-                await asyncio.sleep(min(2 ** attempt, 10))
-
-        return {"status": "error", "message": f"Failed after {self.max_retries} attempts"}
+        return {
+            "status": "success",
+            "media_kind": "slideshow",
+            "file_paths": files,
+            "title": title,
+            "duration": duration,
+            "uploader": "TikTok",
+        }
 
     async def download_with_ytdlp(self, url: str, type: str = "video") -> Dict[str, Any]:
         """Download using yt-dlp with pre-download size check."""
-        # Prefer CLI mode (killable on timeout) in production.
-        if self.use_cli:
-            return await self.download_with_ytdlp_cli(url, type)
-
         loop = asyncio.get_running_loop()
 
         # Normalize some URLs first
         if self._detect_platform(url) == 'youtube':
             url = self._normalize_youtube_url(url)
+
+        # TikTok photo/slideshow posts don't have a single media filesize and should be handled separately.
+        if self._detect_platform(url) == 'tiktok' and type == 'video':
+            try:
+                probe_opts = self._get_opts(type, url, check_only=True)
+                probe_opts['noplaylist'] = False
+                info = await loop.run_in_executor(self.executor, self._probe_sync, url, probe_opts)
+                if isinstance(info, dict) and self._is_slideshow_info(info):
+                    logger.info("🖼 Detected TikTok slideshow → downloading images")
+                    base_opts = self._get_opts(type, url)
+                    return await loop.run_in_executor(
+                        self.executor,
+                        self._download_tiktok_slideshow_sync,
+                        url,
+                        base_opts,
+                    )
+            except Exception as e:
+                logger.warning(f"TikTok slideshow probe failed, continuing normal flow: {e}")
 
         # STEP 1: Check file size first (without downloading)
         logger.info("📏 Checking file size before download...")
@@ -675,19 +627,22 @@ class Downloader:
         
         platform = self._detect_platform(url)
         
-        # Route 1: TikTok → Cobalt API
+        # Route 1: TikTok
         if platform == 'tiktok':
-            logger.info("🎵 Routing to Cobalt API for TikTok")
+            # Audio on TikTok is much more reliable via yt-dlp + ffmpeg extraction.
+            if type == 'audio':
+                logger.info("🎵 TikTok audio → yt-dlp")
+                return await self.download_with_ytdlp(url, type)
+
+            # Video: try Cobalt first for classic videos, but always allow yt-dlp to auto-detect slideshows.
+            logger.info("🎵 TikTok video → Cobalt API (fallback yt-dlp / slideshow auto)")
             try:
                 from src.cobalt_api import cobalt_downloader
                 result = await cobalt_downloader.download(url, type)
-                
-                if result["status"] == "success":
+                if result.get("status") == "success":
                     return result
-                
-                logger.warning("⚠️ Cobalt failed, falling back to yt-dlp...")
+                logger.warning("⚠️ Cobalt failed or unsupported, falling back to yt-dlp...")
                 return await self.download_with_ytdlp(url, type)
-                
             except ImportError:
                 logger.error("❌ cobalt_api.py not found! Using yt-dlp")
                 return await self.download_with_ytdlp(url, type)

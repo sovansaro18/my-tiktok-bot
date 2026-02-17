@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 from typing import Optional
 
 from aiogram import Bot
@@ -92,3 +93,87 @@ async def safe_remove_file(file_path: str) -> bool:
     except OSError as e:
         logger.error(f"Error removing file {file_path}: {e}")
         return False
+
+
+_ALLOWED_HTML_TAGS = {
+    "b",
+    "strong",
+    "i",
+    "em",
+    "u",
+    "ins",
+    "s",
+    "strike",
+    "del",
+    "code",
+    "pre",
+    "a",
+    "br",
+}
+
+
+def validate_telegram_html(text: str) -> tuple[bool, str]:
+    """Best-effort Telegram HTML validation.
+
+    Telegram rejects messages with malformed/unbalanced tags. This validator focuses on
+    common tags used by admins in broadcasts.
+
+    Returns:
+        (ok, reason)
+    """
+
+    if not text:
+        return True, ""
+
+    # Fast path: no tags
+    if "<" not in text and ">" not in text:
+        return True, ""
+
+    tag_re = re.compile(r"<\s*(/)?\s*([a-zA-Z0-9]+)([^>]*)>")
+    stack: list[str] = []
+
+    for m in tag_re.finditer(text):
+        closing = bool(m.group(1))
+        name = (m.group(2) or "").lower()
+        attrs = m.group(3) or ""
+
+        if name not in _ALLOWED_HTML_TAGS:
+            return False, f"Tag មិនអនុញ្ញាត: <{name}>"
+
+        if name == "br":
+            continue
+
+        if name == "a":
+            if closing:
+                if not stack or stack[-1] != "a":
+                    return False, "Tag <a> មិនបានបិទត្រឹមត្រូវ"
+                stack.pop()
+                continue
+            # opening <a>
+            if "href" not in attrs.lower():
+                return False, "Tag <a> ត្រូវមាន href"
+            stack.append("a")
+            continue
+
+        # Normalize alias tags
+        aliases = {
+            "strong": "b",
+            "em": "i",
+            "ins": "u",
+            "strike": "s",
+            "del": "s",
+        }
+        name = aliases.get(name, name)
+
+        if closing:
+            if not stack or stack[-1] != name:
+                return False, f"Tag </{name}> មិនត្រូវជាមួយ tag បើក"
+            stack.pop()
+        else:
+            stack.append(name)
+
+    if stack:
+        # Most common: missing closing tag
+        return False, f"Tag HTML មិនបានបិទ: {', '.join(f'</{t}>' for t in reversed(stack))}"
+
+    return True, ""
