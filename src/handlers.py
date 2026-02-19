@@ -5,7 +5,14 @@ from html import escape
 from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    FSInputFile,
+    InputMediaPhoto,
+)
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -31,8 +38,24 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────────────────────────────
+# FSM States
+# ─────────────────────────────────────────────
+
+class DownloadState(StatesGroup):
+    waiting_for_format = State()
+
+
+class ReportState(StatesGroup):
+    waiting_for_report = State()
+
+
+# ─────────────────────────────────────────────
+# Helper: Friendly Error Messages
+# ─────────────────────────────────────────────
+
 def friendly_download_error(url: str, err: str) -> str:
-    """Map raw downloader errors to user-friendly Khmer messages (all platforms)."""
+    """Map raw downloader errors to user-friendly Khmer messages."""
     u = (url or "").lower()
     e = (err or "").lower()
 
@@ -53,75 +76,62 @@ def friendly_download_error(url: str, err: str) -> str:
 
     privacy_markers = (
         "cannot download this facebook video",
-        "private",
-        "friends-only",
-        "members",
-        "group",
-        "this content isn't available",
-        "content isn't available",
-        "not available",
-        "video unavailable",
-        "unavailable",
-        "has been removed",
-        "deleted",
+        "private", "friends-only", "members", "group",
+        "this content isn't available", "content isn't available",
+        "not available", "video unavailable", "unavailable",
+        "has been removed", "deleted",
     )
     login_markers = (
-        "login",
-        "sign in",
-        "need cookies",
-        "cookies.txt",
-        "confirm your age",
-        "age-restricted",
+        "login", "sign in", "need cookies", "cookies.txt",
+        "confirm your age", "age-restricted",
     )
     geo_markers = (
-        "not available in your country",
-        "regional",
-        "geo",
-        "country",
-        "location",
+        "not available in your country", "regional",
+        "geo", "country", "location",
     )
-    copyright_markers = (
-        "copyright",
-        "claimed",
-        "blocked",
-    )
+    copyright_markers = ("copyright", "claimed", "blocked")
 
     if any(m in e for m in privacy_markers):
         return (
             "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
-            "នេះជាវីដេអូ <b>Private</b> (ឬ Friends-only/Group-private) ហើយ <b>ខុសគោលការណ៍របស់ Bot</b> "
+            "នេះជាវីដេអូ <b>Private</b> (ឬ Friends-only/Group-private) "
+            "ហើយ <b>ខុសគោលការណ៍របស់ Bot</b> "
             "ដូច្នេះ Bot <b>មិនអាចទាញយកបាន</b>។\n\n"
             f"✅ សូមផ្ញើ Link វីដេអូដែលជា <b>Public</b> ពី {plat} មកវិញ។"
         )
-
     if any(m in e for m in login_markers):
         return (
             "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
-            f"វីដេអូនេះមានការកំណត់ <b>Age-restricted/Login required</b> ពី {plat}។ "
-            "Bot មិនអាចទាញយកវីដេអូប្រភេទនេះបានទេ។\n\n"
-            "✅ សូមសាកល្បងវីដេអូ <b>Public</b> ផ្សេង ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+            f"វីដេអូនេះមានការកំណត់ <b>Age-restricted/Login required</b> "
+            f"ពី {plat}។ Bot មិនអាចទាញយកវីដេអូប្រភេទនេះបានទេ។\n\n"
+            "✅ សូមសាកល្បងវីដេអូ <b>Public</b> ផ្សេង "
+            "ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
         )
-
     if any(m in e for m in geo_markers):
         return (
             "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
             f"វីដេអូនេះអាចមានការកំណត់ <b>តំបន់/ប្រទេស</b> ពី {plat}។\n\n"
-            "✅ សូមសាកល្បង Link ផ្សេង ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+            "✅ សូមសាកល្បង Link ផ្សេង "
+            "ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
         )
-
     if any(m in e for m in copyright_markers):
         return (
             "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
-            "វីដេអូនេះអាចជាវីដេអូដែលមាន <b>Copyright/Blocked</b> ហើយស្ថិតក្រៅគោលការណ៍ Bot។\n\n"
+            "វីដេអូនេះអាចជាវីដេអូដែលមាន <b>Copyright/Blocked</b> "
+            "ហើយស្ថិតក្រៅគោលការណ៍ Bot។\n\n"
             "✅ សូមសាកល្បង Link ផ្សេង។"
         )
-
     return (
         "❌ <b>មានបញ្ហាក្នុងការទាញយក</b>\n\n"
         "សូមព្យាយាមម្តងទៀត ឬផ្ញើ Link ផ្សេង។ "
-        "បើបញ្ហានេះកើតឡើងជាបន្តបន្ទាប់ សូមប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+        "បើបញ្ហានេះកើតឡើងជាបន្តបន្ទាប់ "
+        "សូមប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
     )
 
+
+# ─────────────────────────────────────────────
+# Helper: Keyboards
+# ─────────────────────────────────────────────
 
 def premium_buy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -142,69 +152,80 @@ def premium_buy_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
-    """Safely delete a message without raising exceptions."""
+# ─────────────────────────────────────────────
+# Helper: Message Deletion
+# ─────────────────────────────────────────────
+
+async def safe_delete_message(
+    bot: Bot, chat_id: int, message_id: int
+) -> bool:
+    """Delete a Telegram message without raising exceptions."""
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        logger.info(f"✅ Deleted message {message_id}")
         return True
     except TelegramBadRequest as e:
-        if "message to delete not found" in str(e).lower():
-            logger.info(f"ℹ️ Message {message_id} already deleted or not found")
+        err = str(e).lower()
+        if "message to delete not found" in err:
             return True
-        elif "message can't be deleted" in str(e).lower():
-            logger.warning(f"⚠️ Cannot delete message {message_id} (too old or permission issue)")
+        if "message can't be deleted" in err:
+            logger.warning(f"⚠️ Cannot delete message {message_id}")
             return False
-        else:
-            logger.error(f"❌ Error deleting message {message_id}: {e}")
-            return False
+        logger.error(f"❌ Error deleting message {message_id}: {e}")
+        return False
     except Exception as e:
         logger.error(f"❌ Unexpected error deleting message {message_id}: {e}")
         return False
 
 
-def check_daily_limit(user_data: dict) -> tuple[bool, str, InlineKeyboardMarkup | None]:
+# ─────────────────────────────────────────────
+# Helper: Daily Limit Check
+# ─────────────────────────────────────────────
+
+def check_daily_limit(
+    user_data: dict,
+) -> tuple[bool, str, InlineKeyboardMarkup | None]:
     """
-    Check if user has exceeded daily download limit.
-    
+    Check if a free user has exceeded their daily download quota.
+
     Returns:
-        (can_download, message)
+        (can_download, info_message, keyboard_or_None)
     """
-    status = user_data.get("status", "free")
-    
-    # Premium users: unlimited
-    if status == "premium":
+    if user_data.get("status") == "premium":
         return True, "", None
-    
-    # After trial: check daily limit
+
     last_download_date = user_data.get("last_download_date")
     daily_count = user_data.get("daily_download_count", 0)
-    
     today = datetime.now(timezone.utc).date()
-    
-    # Reset counter if new day
+
+    # Reset counter if it's a new day
     if not last_download_date or last_download_date.date() != today:
         return True, "", None
-    
-    # Check if exceeded daily limit
+
     if daily_count >= FREE_DAILY_LIMIT:
-        return False, (
-            f"🚫 <b>អស់ការទាញយកប្រចាំថ្ងៃរបស់អ្នកហើយ!</b>\n\n"
-            f"📊 កំណត់សម្រាប់អ្នកប្រើឥតគិតថ្លៃ: {FREE_DAILY_LIMIT} ដង/ថ្ងៃ\n"
-            f"⏰ សូមព្យាយាមម្តងទៀតនៅថ្ងៃស្អែក\n\n"
-            f"💎 <b>ចង់ប្រើមិនកំណត់?</b>\n"
-            f"Upgrade ទៅ Premium តម្លៃ <b>${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)"
-        ), premium_buy_keyboard()
-    
+        return (
+            False,
+            (
+                f"🚫 <b>អស់ការទាញយកប្រចាំថ្ងៃរបស់អ្នកហើយ!</b>\n\n"
+                f"📊 កំណត់: {FREE_DAILY_LIMIT} ដង/ថ្ងៃ\n"
+                f"⏰ សូមព្យាយាមម្តងទៀតនៅថ្ងៃស្អែក\n\n"
+                f"💎 <b>ចង់ប្រើមិនកំណត់?</b>\n"
+                f"Upgrade ទៅ Premium តម្លៃ <b>${PREMIUM_PRICE:.2f}</b> "
+                f"(បង់តែម្តង)"
+            ),
+            premium_buy_keyboard(),
+        )
+
     remaining = FREE_DAILY_LIMIT - daily_count
     return True, f"📊 នៅសល់: {remaining}/{FREE_DAILY_LIMIT} ដងសម្រាប់ថ្ងៃនេះ", None
 
 
+# ─────────────────────────────────────────────
+# Helper: Usage Notification
+# ─────────────────────────────────────────────
+
 def get_usage_notification(user_data: dict) -> dict:
-    """Generate usage notification with daily limit info."""
-    status = user_data.get("status", "free")
-    
-    if status == "premium":
+    """Build post-download usage summary message."""
+    if user_data.get("status") == "premium":
         return {
             "text": (
                 "✅ <b>ទាញយករួចរាល់!</b>\n\n"
@@ -214,182 +235,132 @@ def get_usage_notification(user_data: dict) -> dict:
                 "🎬 គុណភាព 1080p\n\n"
                 "<i>អរគុណសម្រាប់ការជឿទុកចិត្ត!</i>"
             ),
-            "keyboard": None
+            "keyboard": None,
         }
-    
-    # Free user
+
     daily_count = user_data.get("daily_download_count", 0)
-    remaining = FREE_DAILY_LIMIT - daily_count
-    
-    # Progress bar
+    remaining = max(0, FREE_DAILY_LIMIT - daily_count)
     filled = int((daily_count / FREE_DAILY_LIMIT) * 5)
-    empty = 5 - filled
-    progress_bar = "🟩" * filled + "⬜" * empty
-    
+    progress_bar = "🟩" * filled + "⬜" * (5 - filled)
+
     text = (
         f"📢 <b>ស្ថានភាពការទាញយក</b>\n\n"
         f"🎞️ <b>ទាញយកថ្ងៃនេះ:</b> {daily_count}/{FREE_DAILY_LIMIT}\n"
         f"📊 <b>នៅសល់:</b> {remaining} ដងទៀត\n"
         f"{progress_bar}\n"
         f"🎬 គុណភាព: {FREE_MAX_QUALITY}\n\n"
-    )
-    
-    text += (
         "💎 <b>Premium (បង់តែម្តង)</b>\n"
         "• ទាញយកមិនកំណត់ ♾️\n"
         "• គុណភាព 1080p 🎬\n"
         "• ល្បឿនលឿន 🚀\n"
         f"• តម្លៃ: <b>${PREMIUM_PRICE:.2f}</b>"
     )
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"💳 ទិញ Premium ${PREMIUM_PRICE:.2f}",
-                    callback_data="buy_premium",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"ℹ️ ព័ត៌មាន Premium (${PREMIUM_PRICE:.2f})",
-                    callback_data="premium_info",
-                )
-            ],
-        ]
-    )
-    
-    return {"text": text, "keyboard": keyboard}
+    return {"text": text, "keyboard": premium_buy_keyboard()}
 
 
-class DownloadState(StatesGroup):
-    waiting_for_format = State()
-
-
-class ReportState(StatesGroup):
-    waiting_for_report = State()
-
+# ─────────────────────────────────────────────
+# Commands: /start
+# ─────────────────────────────────────────────
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    """Handle /start command with detailed welcome message."""
     await state.clear()
     user_id = message.from_user.id
     user_data, is_new = await db.get_user(user_id)
-    
+
     if is_new:
         await send_log(
-            f"🆕 New User Joined: {message.from_user.full_name} (`{user_id}`)",
-            bot=message.bot
+            f"🆕 New User: {escape(message.from_user.full_name)} "
+            f"(<code>{user_id}</code>)",
+            bot=message.bot,
         )
 
     status = user_data.get("status", "free")
-    
-    # Welcome message
     welcome = f"👋 <b>សួស្តី {escape(message.from_user.full_name)}!</b>\n\n"
-    
-    # Bot capabilities
     welcome += (
         "🤖 <b>អ្វីដែលបតអាចធ្វើបាន:</b>\n"
         "✅ ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
-        "✅ គាំទ្រ: TikTok, Facebook, YouTube Shorts, Instagram, Pinterest\n"
-        "✅ ទាញយកជា Video ឬ Audio\n"
-        "✅ គុណភាពល្អ (អាស្រ័យលើគណនីរបស់អ្នក)\n\n"
-        
+        "✅ គាំទ្រ: TikTok, Facebook, YouTube, Instagram, Pinterest\n"
+        "✅ ទាញយកជា Video ឬ Audio\n\n"
         "🚫 <b>កំណត់:</b>\n"
         "❌ មិនគាំទ្រវីដេអូ Private\n"
-        "❌ មិនគាំទ្រវីដេអូដែលមាន Copyright\n"
-        "❌ ទំហំវីដេអូត្រូវតូចជាង 49MB\n"
-        "❌ ត្រឹមតែវីដេអូ Public ប៉ុណ្ណោះ\n\n"
+        "❌ មិនគាំទ្រវីដេអូ Copyright\n"
+        "❌ ទំហំតូចជាង 49MB\n\n"
     )
-    
-    # Show status based on user type
+
     if status == "premium":
         welcome += (
-            "💎 <b>ស្ថានភាពរបស់អ្នក: PREMIUM</b>\n\n"
-            "🎁 <b>អត្ថប្រយោជន៍របស់អ្នក:</b>\n"
+            "💎 <b>ស្ថានភាព: PREMIUM</b>\n\n"
             "♾️ ទាញយកបានមិនកំណត់\n"
             "🎬 គុណភាព 1080p\n"
-            "🚀 ល្បឿនលឿនបំផុត\n"
-            "💬 ជំនួយអាទិភាព 24/7\n\n"
-            "<i>គ្រាន់តែផ្ញើ link មកខ្ញុំ ហើយខ្ញុំនឹងទាញយកឱ្យអ្នក!</i>"
+            "🚀 ល្បឿនលឿនបំផុត\n\n"
+            "<i>គ្រាន់តែផ្ញើ link ហើយខ្ញុំទាញយកឱ្យ!</i>"
         )
+        await message.answer(welcome, parse_mode="HTML")
     else:
         daily_count = user_data.get("daily_download_count", 0)
         remaining = max(0, FREE_DAILY_LIMIT - daily_count)
-
         welcome += (
-            "🆓 <b>ស្ថានភាពរបស់អ្នក: ឥតគិតថ្លៃ</b>\n\n"
-            "🎁 <b>អត្ថប្រយោជន៍បច្ចុប្បន្ន:</b>\n"
-            f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (ថ្ងៃនេះនៅសល់: {remaining})\n"
-            f"• គុណភាពអតិបរមា: {FREE_MAX_QUALITY}\n"
-            "• ល្បឿនមធ្យម\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "💎 <b>Premium (បង់តែម្តង)</b>\n"
-            "• ទាញយកមិនកំណត់ ♾️\n"
-            "• គុណភាព 1080p 🎬\n"
-            "• ល្បឿនលឿន 🚀\n"
-            f"• តម្លៃ: <b>${PREMIUM_PRICE:.2f}</b>\n\n"
-            "<i>ផ្ញើ link មកខ្ញុំ ហើយជ្រើស Video/Audio ដើម្បីទាញយក</i>"
+            "🆓 <b>ស្ថានភាព: ឥតគិតថ្លៃ</b>\n\n"
+            f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (នៅសល់: {remaining})\n"
+            f"• គុណភាព: {FREE_MAX_QUALITY}\n\n"
+            f"💎 Premium: <b>${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)\n"
+            "<i>ផ្ញើ link ហើយជ្រើស Video/Audio!</i>"
+        )
+        await message.answer(
+            welcome, parse_mode="HTML", reply_markup=premium_buy_keyboard()
         )
 
-    if status == "premium":
-        await message.answer(welcome, parse_mode="HTML")
-    else:
-        await message.answer(welcome, parse_mode="HTML", reply_markup=premium_buy_keyboard())
 
+# ─────────────────────────────────────────────
+# Commands: /plan
+# ─────────────────────────────────────────────
 
 @router.message(Command("plan"))
 async def cmd_plan(message: Message, state: FSMContext):
-    """Show user plan details."""
     await state.clear()
     user_id = message.from_user.id
     user_data, _ = await db.get_user(user_id)
-    
     status = user_data.get("status", "free")
-    joined_date = user_data.get("joined_date")
-    
+
     if status == "premium":
         text = (
-            f"📊 <b>ព័ត៌មានគណនីរបស់អ្នក</b>\n\n"
-            f"👤 ឈ្មោះ: {escape(message.from_user.full_name)}\n"
+            f"📊 <b>ព័ត៌មានគណនី</b>\n\n"
+            f"👤 {escape(message.from_user.full_name)}\n"
             f"🏷 ស្ថានភាព: <b>PREMIUM 💎</b>\n\n"
-            f"🎁 <b>អត្ថប្រយោជន៍:</b>\n"
-            f"♾️ ទាញយកមិនកំណត់\n"
-            f"🎬 គុណភាព 1080p\n"
-            f"🚀 ល្បឿនលឿនបំផុត\n"
-            f"💬 ជំនួយអាទិភាព 24/7\n\n"
-            f"<i>សូមអរគុណសម្រាប់ការគាំទ្រ! ❤️</i>"
+            "♾️ ទាញយកមិនកំណត់\n"
+            "🎬 គុណភាព 1080p\n"
+            "🚀 ល្បឿនលឿន\n\n"
+            "<i>អរគុណ! ❤️</i>"
         )
+        await message.answer(text, parse_mode="HTML")
     else:
         daily_count = user_data.get("daily_download_count", 0)
         remaining = max(0, FREE_DAILY_LIMIT - daily_count)
-
         text = (
-            f"📊 <b>ព័ត៌មានគណនីរបស់អ្នក</b>\n\n"
-            f"👤 ឈ្មោះ: {escape(message.from_user.full_name)}\n"
+            f"📊 <b>ព័ត៌មានគណនី</b>\n\n"
+            f"👤 {escape(message.from_user.full_name)}\n"
             f"🏷 ស្ថានភាព: <b>ឥតគិតថ្លៃ 🆓</b>\n\n"
-            f"🎁 <b>អត្ថប្រយោជន៍:</b>\n"
-            f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (ថ្ងៃនេះនៅសល់: {remaining})\n"
-            f"• គុណភាពអតិបរមា: {FREE_MAX_QUALITY}\n"
-            f"• ល្បឿនមធ្យម\n\n"
-            f"💎 <b>Premium (បង់តែម្តង):</b>\n"
-            f"• ទាញយកមិនកំណត់ ♾️\n"
-            f"• គុណភាព 1080p 🎬\n"
-            f"• ល្បឿនលឿន 🚀\n"
-            f"• តម្លៃ: <b>${PREMIUM_PRICE:.2f}</b>"
+            f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (នៅសល់: {remaining})\n"
+            f"• គុណភាព: {FREE_MAX_QUALITY}\n\n"
+            f"💎 Premium: <b>${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)\n"
+            "• ♾️ មិនកំណត់ | 🎬 1080p | 🚀 លឿន"
         )
-        
-    if status == "premium":
-        await message.answer(text, parse_mode="HTML")
-    else:
-        await message.answer(text, parse_mode="HTML", reply_markup=premium_buy_keyboard())
+        await message.answer(
+            text, parse_mode="HTML", reply_markup=premium_buy_keyboard()
+        )
 
+
+# ─────────────────────────────────────────────
+# Commands: /report
+# ─────────────────────────────────────────────
 
 @router.message(Command("report"))
 async def cmd_report(message: Message, state: FSMContext):
     await state.set_state(ReportState.waiting_for_report)
     await message.answer(
-        "📩 <b>សូមវាយសារជូនដំណឹង!</b>\n\nសរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ។",
+        "📩 <b>សូមវាយសារជូនដំណឹង!</b>\n\n"
+        "សរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ។",
         parse_mode="HTML",
     )
 
@@ -398,7 +369,7 @@ async def cmd_report(message: Message, state: FSMContext):
 async def handle_report(message: Message, state: FSMContext):
     report_text = (message.text or "").strip()
     if not report_text:
-        await message.answer("⚠️ សូមវាយសារជូនដំណឹងមកខ្ញុំ។")
+        await message.answer("⚠️ សូមវាយសារជូនដំណឹង។")
         return
 
     user_id = message.from_user.id
@@ -413,8 +384,7 @@ async def handle_report(message: Message, state: FSMContext):
         f"🆔 <code>{user_id}</code>\n"
         f"🔗 {username_line}\n"
         f"🕒 {now_str}\n\n"
-        "📝 <b>Message:</b>\n"
-        f"{escape(report_text)}"
+        f"📝 <b>Message:</b>\n{escape(report_text)}"
     )
 
     try:
@@ -424,7 +394,7 @@ async def handle_report(message: Message, state: FSMContext):
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-        await message.answer("✅ បានផ្ញើសារជូនដំណឹងទៅ Admin រួចរាល់។")
+        await message.answer("✅ បានផ្ញើ report ទៅ Admin រួចរាល់។")
     except Exception as e:
         logger.error(f"Failed to send report: {e}")
         await message.answer("❌ មិនអាចផ្ញើ report បានទេ។ សូមព្យាយាមម្តងទៀត។")
@@ -434,18 +404,23 @@ async def handle_report(message: Message, state: FSMContext):
 
 @router.message(ReportState.waiting_for_report)
 async def handle_report_non_text(message: Message):
-    await message.answer("⚠️ សូមផ្ញើជា <b>អត្ថបទ</b> ដើម្បីជូនដំណឹង។", parse_mode="HTML")
+    await message.answer(
+        "⚠️ សូមផ្ញើជា <b>អត្ថបទ</b> ដើម្បីជូនដំណឹង។",
+        parse_mode="HTML",
+    )
 
 
-@router.message(F.text.regexp(r'(https?://[^\s]+)'))
+# ─────────────────────────────────────────────
+# URL Handler → Format Selection
+# ─────────────────────────────────────────────
+
+@router.message(F.text.regexp(r"(https?://[^\s]+)"))
 async def handle_link(message: Message, state: FSMContext):
-    """Handle video URL messages."""
+    """Validate URL and ask user to choose Video or Audio format."""
     user_id = message.from_user.id
     user_data, _ = await db.get_user(user_id)
-    
-    # Check daily limit for free users
+
     can_download, limit_msg, limit_kb = check_daily_limit(user_data)
-    
     if not can_download:
         await message.answer(limit_msg, parse_mode="HTML", reply_markup=limit_kb)
         return
@@ -459,140 +434,153 @@ async def handle_link(message: Message, state: FSMContext):
             parse_mode="HTML",
         )
         return
-    
-    # Store URL and message IDs
+
     await state.update_data(url=url, url_message_id=message.message_id)
     await state.set_state(DownloadState.waiting_for_format)
-    
-    # Show format selection
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"),
-            InlineKeyboardButton(text="🎵 អូឌីយ៉ូ (MP3)", callback_data="fmt_audio")
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"
+                ),
+                InlineKeyboardButton(
+                    text="🎵 អូឌីយ៉ូ (MP3)", callback_data="fmt_audio"
+                ),
+            ]
         ]
-    ])
-    
-    # Show limit info if available
+    )
+
     info_text = "👇 សូមជ្រើសរើសប្រភេទ:\n\n"
     if limit_msg:
         info_text += f"<i>{limit_msg}</i>"
-    
-    format_msg = await message.answer(info_text, reply_markup=keyboard, parse_mode="HTML")
+
+    format_msg = await message.answer(
+        info_text, reply_markup=keyboard, parse_mode="HTML"
+    )
     await state.update_data(format_message_id=format_msg.message_id)
 
 
+# ─────────────────────────────────────────────
+# Download Callback Handler
+# ─────────────────────────────────────────────
+
 @router.callback_query(F.data.startswith("fmt_"))
 async def process_download_callback(callback: CallbackQuery, state: FSMContext):
-    """Handle format selection and download."""
+    """Handle Video/Audio format selection and execute download."""
     data = await state.get_data()
     url = data.get("url")
     url_message_id = data.get("url_message_id")
     format_message_id = data.get("format_message_id")
     file_path = None
-    
+
     if not url:
-        await callback.message.edit_text("⚠️ សម័យផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត។")
+        await callback.message.edit_text(
+            "⚠️ សម័យផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត។"
+        )
         return
 
     download_type = "audio" if callback.data == "fmt_audio" else "video"
-    
+
     progress_msg = await callback.message.edit_text(
         f"⏳ <b>កំពុងទាញយក {download_type.upper()}...</b>\n"
-        f"<i>សូមរង់ចាំបន្តិច...</i>",
-        parse_mode="HTML"
+        "<i>សូមរង់ចាំបន្តិច...</i>",
+        parse_mode="HTML",
     )
-    
-    # Download with timeout
+
+    # ── Execute download with timeout ────────────────────────────
     try:
         result = await asyncio.wait_for(
             downloader.download(url, type=download_type),
-            timeout=DOWNLOAD_TIMEOUT
+            timeout=DOWNLOAD_TIMEOUT,
         )
     except asyncio.TimeoutError:
-        logger.warning(f"Download timeout for URL: {url}")
+        logger.warning(f"⏱ Download timeout: {url}")
         await progress_msg.edit_text(
             "❌ <b>ការទាញយកយូរពេកហើយ</b>\n\n"
             "សូមព្យាយាមជាមួយវីដេអូខ្លីជាងនេះ។",
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
         await send_log(
-            f"⏱ Download Timeout\n"
-            f"User: `{callback.from_user.id}`\n"
-            f"URL: {url}\n"
-            f"Type: {download_type}",
-            bot=callback.bot
+            f"⏱ Timeout\nUser: <code>{callback.from_user.id}</code>\n"
+            f"URL: {url}\nType: {download_type}",
+            bot=callback.bot,
         )
         await state.clear()
         return
-    
-    # Handle download errors
+
+    # ── Handle download errors ───────────────────────────────────
     if result["status"] == "error":
         raw_error = str(result.get("message", "Unknown error"))
-        user_message = friendly_download_error(url, raw_error)
-        await progress_msg.edit_text(user_message, parse_mode="HTML")
-        
+        await progress_msg.edit_text(
+            friendly_download_error(url, raw_error), parse_mode="HTML"
+        )
         await send_log(
             f"❌ Download Error\n"
-            f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)\n"
-            f"URL: {url}\n"
-            f"Type: {download_type}\n"
-            f"Error: {raw_error}",
-            bot=callback.bot
+            f"User: {escape(callback.from_user.full_name)} "
+            f"(<code>{callback.from_user.id}</code>)\n"
+            f"URL: {url}\nType: {download_type}\nError: {raw_error[:300]}",
+            bot=callback.bot,
         )
         await state.clear()
         return
 
-    # TikTok photo/slideshow (auto-detected by downloader)
-    if result.get("media_kind") == "slideshow" and isinstance(result.get("file_paths"), list):
+    # ── TikTok Slideshow ─────────────────────────────────────────
+    if (
+        result.get("media_kind") == "slideshow"
+        and isinstance(result.get("file_paths"), list)
+    ):
         await progress_msg.edit_text("📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
 
-        from aiogram.types import InputMediaPhoto
+        paths = [
+            p
+            for p in result.get("file_paths", [])
+            if isinstance(p, str) and os.path.exists(p)
+        ]
 
-        paths = [p for p in result.get("file_paths") if isinstance(p, str) and os.path.exists(p)]
         if not paths:
-            await progress_msg.edit_text("❌ <b>មិនអាចរកឃើញរូបភាពបានទេ</b>", parse_mode="HTML")
+            await progress_msg.edit_text(
+                "❌ <b>មិនអាចរកឃើញរូបភាពបានទេ</b>", parse_mode="HTML"
+            )
             await state.clear()
             return
 
-        safe_title = escape(str(result.get('title', 'TikTok Photo')))
+        safe_title = escape(str(result.get("title", "TikTok Photo")))
         caption = (
             f"✅ <b>ទាញយករួចរាល់!</b>\n"
-            f"📌 ចំណងជើង: {safe_title}\n"
-            f"🤖 តាមរយៈ @ravi_downloader_bot"
+            f"📌 {safe_title}\n"
+            "🤖 @ravi_downloader_bot"
         )
 
-        # Telegram media groups support up to 10 items per group
-        chunk_size = 10
-        for i in range(0, len(paths), chunk_size):
-            chunk = paths[i:i + chunk_size]
-            media = []
-            for j, p in enumerate(chunk):
-                media.append(
-                    InputMediaPhoto(
-                        media=FSInputFile(p),
-                        caption=(caption if i == 0 and j == 0 else None),
-                        parse_mode=("HTML" if i == 0 and j == 0 else None),
-                    )
+        # Telegram media groups: max 10 per batch
+        for i in range(0, len(paths), 10):
+            chunk = paths[i : i + 10]
+            media = [
+                InputMediaPhoto(
+                    media=FSInputFile(p),
+                    caption=(caption if i == 0 and j == 0 else None),
+                    parse_mode=("HTML" if i == 0 and j == 0 else None),
                 )
+                for j, p in enumerate(chunk)
+            ]
             await callback.message.answer_media_group(media)
 
-        # Cleanup messages
+        # Cleanup UI messages
         chat_id = callback.message.chat.id
-        if url_message_id:
-            await safe_delete_message(callback.bot, chat_id, url_message_id)
-        if format_message_id:
-            await safe_delete_message(callback.bot, chat_id, format_message_id)
+        for mid in [url_message_id, format_message_id]:
+            if mid:
+                await safe_delete_message(callback.bot, chat_id, mid)
         try:
             await progress_msg.delete()
         except Exception:
             pass
 
-        # Update usage
+        # ✅ FIX 4.1: Record download AFTER successful send
         user_id = callback.from_user.id
         user_data, _ = await db.get_user(user_id)
         if user_data.get("status") != "premium":
-            updated_user_data = await db.record_download(user_id)
-            notification = get_usage_notification(updated_user_data)
+            updated = await db.record_download(user_id)
+            notification = get_usage_notification(updated)
         else:
             notification = get_usage_notification(user_data)
 
@@ -602,23 +590,24 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             reply_markup=notification["keyboard"],
         )
 
-        # Remove files
+        # Remove image files + empty folder
         for p in paths:
             await safe_remove_file(p)
-        # Try remove folder if empty
         try:
-            folder = os.path.dirname(paths[0])
-            if folder and os.path.isdir(folder) and not os.listdir(folder):
-                os.rmdir(folder)
+            # ✅ FIX 1.3: Guard against empty paths list
+            if paths:
+                folder = os.path.dirname(paths[0])
+                if folder and os.path.isdir(folder) and not os.listdir(folder):
+                    os.rmdir(folder)
         except Exception:
             pass
 
         await state.clear()
         return
 
+    # ── Regular Video / Audio File ───────────────────────────────
     file_path = result["file_path"]
-    
-    # Check file size
+
     if os.path.exists(file_path):
         file_size = os.path.getsize(file_path)
         if file_size > MAX_FILE_SIZE:
@@ -626,134 +615,130 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
                 f"❌ <b>ឯកសារធំពេកសម្រាប់ Telegram</b>\n\n"
                 f"📊 ទំហំ: {file_size / 1024 / 1024:.1f}MB\n"
                 f"⚠️ កំណត់: {MAX_FILE_SIZE / 1024 / 1024:.0f}MB\n\n"
-                f"សូមព្យាយាមវីដេអូគុណភាពទាបជាង ឬជ្រើសរើសអូឌីយ៉ូ។",
-                parse_mode="HTML"
+                "សូមព្យាយាមវីដេអូគុណភាពទាបជាង ឬជ្រើស Audio។",
+                parse_mode="HTML",
             )
             await safe_remove_file(file_path)
             await state.clear()
             return
-    
-    # Prepare caption
-    safe_title = escape(str(result.get('title', 'Unknown')))
-    safe_duration = escape(str(result.get('duration', 0)))
-    
+
+    safe_title = escape(str(result.get("title", "Unknown")))
+    safe_duration = escape(str(result.get("duration", 0)))
     caption = (
         f"✅ <b>ទាញយករួចរាល់!</b>\n"
-        f"📌 ចំណងជើង: {safe_title}\n"
-        f"⏱ រយៈពេល: {safe_duration}វិ\n"
-        f"🤖 តាមរយៈ @ravi_downloader_bot"
+        f"📌 {safe_title}\n"
+        f"⏱ {safe_duration}វិ\n"
+        "🤖 @ravi_downloader_bot"
     )
 
-    # Upload file
     try:
         await progress_msg.edit_text("📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
-        
+
         file_input = FSInputFile(file_path)
-        
         if download_type == "audio":
-            await callback.message.answer_audio(file_input, caption=caption, parse_mode="HTML")
+            await callback.message.answer_audio(
+                file_input, caption=caption, parse_mode="HTML"
+            )
         else:
-            await callback.message.answer_video(file_input, caption=caption, parse_mode="HTML")
-        
-        # Cleanup messages
+            await callback.message.answer_video(
+                file_input, caption=caption, parse_mode="HTML"
+            )
+
+        # Cleanup UI messages
         chat_id = callback.message.chat.id
-        
-        if url_message_id:
-            await safe_delete_message(callback.bot, chat_id, url_message_id)
-        
-        if format_message_id:
-            await safe_delete_message(callback.bot, chat_id, format_message_id)
-        
+        for mid in [url_message_id, format_message_id]:
+            if mid:
+                await safe_delete_message(callback.bot, chat_id, mid)
         try:
             await progress_msg.delete()
-        except Exception as e:
-            logger.warning(f"Could not delete progress message: {e}")
-        
+        except Exception:
+            pass
+
+        # ✅ FIX 4.1: Record download AFTER successful Telegram send only
         user_id = callback.from_user.id
         user_data, _ = await db.get_user(user_id)
         if user_data.get("status") != "premium":
-            updated_user_data = await db.record_download(user_id)
-            notification = get_usage_notification(updated_user_data)
+            updated = await db.record_download(user_id)
+            notification = get_usage_notification(updated)
         else:
             notification = get_usage_notification(user_data)
-        
-        # Send notification
+
         await callback.message.answer(
             notification["text"],
             parse_mode="HTML",
-            reply_markup=notification["keyboard"]
+            reply_markup=notification["keyboard"],
         )
-            
+
     except TelegramBadRequest as e:
-        logger.error(f"Telegram API error: {e}")
-        
-        error_str = str(e).lower()
-        if "file is too big" in error_str or "too large" in error_str:
+        err_str = str(e).lower()
+        if "file is too big" in err_str or "too large" in err_str:
             error_msg = (
-                "❌ <b>ឯកសារធំពេកសម្រាប់ Telegram</b>\n\n"
+                "❌ <b>ឯកសារធំពេក</b>\n\n"
                 "⚠️ Telegram កំណត់: 50MB\n"
-                "សូមព្យាយាមវីដេអូគុណភាពទាបជាង។"
+                "សូមជ្រើស Audio ឬ Link វីដេអូខ្លីជាង។"
             )
-        elif "wrong file identifier" in error_str:
-            error_msg = "❌ មានបញ្ហាជាមួយទម្រង់ឯកសារ។ សូមព្យាយាមម្តងទៀត។"
+        elif "wrong file identifier" in err_str:
+            error_msg = "❌ ទម្រង់ឯកសារខុស។ សូមព្យាយាមម្តងទៀត។"
         else:
-            error_msg = f"❌ មិនអាចបញ្ជូនឯកសារបានទេ។\n\n<code>{escape(str(e)[:200])}</code>"
-        
+            error_msg = (
+                f"❌ មិនអាចបញ្ជូនបានទេ។\n\n"
+                f"<code>{escape(str(e)[:200])}</code>"
+            )
         await callback.message.answer(error_msg, parse_mode="HTML")
-        
         await send_log(
             f"❌ Upload Error (Telegram)\n"
-            f"User: `{callback.from_user.id}`\n"
+            f"User: <code>{callback.from_user.id}</code>\n"
             f"Error: {str(e)[:200]}",
-            bot=callback.bot
+            bot=callback.bot,
         )
-        
+
     except Exception as e:
         logger.error(f"Upload failed: {e}", exc_info=True)
         await callback.message.answer(
-            f"❌ មានបញ្ហាក្នុងការបញ្ជូនឯកសារ។\n\n"
-            f"<code>{escape(str(e)[:200])}</code>",
-            parse_mode="HTML"
+            f"❌ មានបញ្ហា upload ។\n\n<code>{escape(str(e)[:200])}</code>",
+            parse_mode="HTML",
         )
-        
         await send_log(
             f"❌ Upload Error (General)\n"
-            f"User: `{callback.from_user.id}`\n"
+            f"User: <code>{callback.from_user.id}</code>\n"
             f"Error: {str(e)[:200]}",
-            bot=callback.bot
+            bot=callback.bot,
         )
+
     finally:
-        # Always cleanup file
+        # Always cleanup downloaded file regardless of outcome
         if file_path:
             await safe_remove_file(file_path)
         await state.clear()
 
 
-# ====== Admin Commands ======
+# ─────────────────────────────────────────────
+# Admin Commands
+# ─────────────────────────────────────────────
 
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: Message):
-    """Admin: Broadcast message to all users."""
+    """Admin: Broadcast a message to all users."""
+    # ✅ FIX 2.2: Respond with unknown command instead of silent return
     if message.from_user.id != ADMIN_ID:
+        await message.answer("⚠️ រកមិនឃើញពាក្យបញ្ជានេះទេ។")
         return
-    
+
     text = message.text.replace("/broadcast", "", 1).strip()
-    
     if not text:
         await message.answer(
-            "⚠️ <b>របៀបប្រើប្រាស់:</b> /broadcast [សារ]\n\n"
+            "⚠️ <b>របៀបប្រើ:</b> /broadcast [សារ]\n\n"
             "<b>ឧទាហរណ៍:</b>\n"
-            "/broadcast 🔧 បតកំពុងធ្វើថែទាំ 30 នាទី។",
-            parse_mode="HTML"
+            "/broadcast 🔧 Bot កំពុងថែទាំ 30 នាទី។",
+            parse_mode="HTML",
         )
         return
 
-    # Validate HTML before broadcasting.
-    # If HTML is invalid, do not send a fallback with raw tags to users.
+    # Validate HTML syntax with a preview send to admin
     preview_text = (
-        f"📢 <b>សេចក្តីជូនដំណឹងពីអ្នកគ្រប់គ្រង</b>\n\n"
+        "📢 <b>សេចក្តីជូនដំណឹង</b>\n\n"
         f"{text}\n\n"
-        f"<i>នេះជាសារផ្លូវការពីអ្នកគ្រប់គ្រងបត។</i>"
+        "<i>សារផ្លូវការពី Admin Bot</i>"
     )
     try:
         preview = await message.bot.send_message(
@@ -762,265 +747,244 @@ async def cmd_broadcast(message: Message):
             parse_mode="HTML",
             disable_notification=True,
         )
-        # Clean up preview to avoid cluttering admin chat
         try:
-            await message.bot.delete_message(chat_id=ADMIN_ID, message_id=preview.message_id)
+            await message.bot.delete_message(
+                chat_id=ADMIN_ID, message_id=preview.message_id
+            )
         except Exception:
             pass
     except TelegramBadRequest as te:
         if "can't parse entities" in str(te).lower():
             await message.answer(
                 "❌ <b>Tag HTML មិនត្រឹមត្រូវ</b>\n\n"
-                "សូមពិនិត្យ <b>&lt;b&gt;...&lt;/b&gt;</b>, <b>&lt;i&gt;...&lt;/i&gt;</b> ឲ្យបិទ tag ត្រឹមត្រូវ។",
+                "ពិនិត្យ <b>&lt;b&gt;</b>, <b>&lt;i&gt;</b> "
+                "ឲ្យបិទ tag ត្រឹមត្រូវ។",
                 parse_mode="HTML",
             )
             return
         raise
-    
-    try:
-        all_users = await db.list_users()
-        
-        total = len(all_users)
-        success = 0
-        failed = 0
-        
-        progress_msg = await message.answer(
-            f"📢 <b>កំពុងផ្សាយ...</b>\n"
-            f"សរុប: {total}\n"
-            f"បញ្ជូន: 0",
-            parse_mode="HTML"
-        )
-        
-        for idx, user in enumerate(all_users, 1):
-            user_id = user.get("user_id")
-            
-            try:
-                await message.bot.send_message(
-                    chat_id=user_id,
-                    text=preview_text,
+
+    all_users = await db.list_users()
+    total = len(all_users)
+    success = failed = 0
+
+    progress_msg = await message.answer(
+        f"📢 <b>កំពុងផ្សាយ...</b>\nសរុប: {total}",
+        parse_mode="HTML",
+    )
+
+    for idx, user in enumerate(all_users, 1):
+        user_id = user.get("user_id")
+        try:
+            await message.bot.send_message(
+                chat_id=user_id,
+                text=preview_text,
+                parse_mode="HTML",
+            )
+            success += 1
+            if idx % 20 == 0:
+                await asyncio.sleep(1)
+            if idx % 10 == 0 or idx == total:
+                await progress_msg.edit_text(
+                    f"📢 <b>កំពុងផ្សាយ...</b>\n"
+                    f"✅ {success} | ❌ {failed} | {idx}/{total}",
                     parse_mode="HTML",
                 )
-                success += 1
-                
-                if idx % 20 == 0:
-                    await asyncio.sleep(1)
-                
-                if idx % 10 == 0 or idx == total:
-                    await progress_msg.edit_text(
-                        f"📢 <b>កំពុងផ្សាយ...</b>\n"
-                        f"សរុប: {total}\n"
-                        f"✅ បញ្ជូន: {success}\n"
-                        f"❌ បរាជ័យ: {failed}\n"
-                        f"ដំណើរការ: {idx}/{total} ({idx*100//total}%)",
-                        parse_mode="HTML"
-                    )
-                
-            except Exception as e:
-                failed += 1
-                logger.warning(f"Failed to send to {user_id}: {e}")
-        
-        await progress_msg.edit_text(
-            f"✅ <b>ផ្សាយរួចរាល់!</b>\n\n"
-            f"📊 សរុប: {total}\n"
-            f"✅ ជោគជ័យ: {success}\n"
-            f"❌ បរាជ័យ: {failed}",
-            parse_mode="HTML"
-        )
-        
-        await send_log(
-            f"📢 Broadcast Sent\n"
-            f"Success: {success}/{total}",
-            bot=message.bot
-        )
-        
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-        await message.answer(f"❌ <b>ផ្សាយបរាជ័យ</b>\n\n{escape(str(e))}", parse_mode="HTML")
+        except Exception as e:
+            failed += 1
+            logger.warning(f"Broadcast failed for {user_id}: {e}")
+
+    await progress_msg.edit_text(
+        f"✅ <b>ផ្សាយរួចរាល់!</b>\n\n"
+        f"📊 សរុប: {total}\n✅ {success} | ❌ {failed}",
+        parse_mode="HTML",
+    )
+    await send_log(
+        f"📢 Broadcast done: {success}/{total}", bot=message.bot
+    )
 
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message):
     """Admin: View bot statistics."""
+    # ✅ FIX 2.2: Respond instead of silent return
     if message.from_user.id != ADMIN_ID:
+        await message.answer("⚠️ រកមិនឃើញពាក្យបញ្ជានេះទេ។")
         return
-    
+
     try:
         stats = await db.count_users()
-        
         total_downloads = await db.total_downloads()
-        
-        premium_sold = stats["premium"]
-        revenue = premium_sold * PREMIUM_PRICE
-        
+        revenue = stats["premium"] * PREMIUM_PRICE
+
         text = (
             f"📊 <b>ស្ថិតិបត</b>\n\n"
-            f"👥 អ្នកប្រើសរុប: <b>{stats['total']}</b>\n"
+            f"👥 សរុប: <b>{stats['total']}</b>\n"
             f"💎 Premium: <b>{stats['premium']}</b>\n"
-            f"🆓 ឥតគិតថ្លៃ: <b>{stats['free']}</b>\n\n"
-            f"⬇️ ការទាញយកសរុប: <b>{total_downloads}</b>\n"
-            f"📈 មធ្យមក្នុងមួយអ្នក: <b>{total_downloads // stats['total'] if stats['total'] > 0 else 0}</b>\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"💰 <b>ការលក់ Premium:</b>\n"
-            f"• តម្លៃ: ${PREMIUM_PRICE:.2f}\n"
-            f"• លក់រួច: <b>{premium_sold}</b>\n"
-            f"• ប្រាក់ចំណូល: <b>${revenue:.2f}</b>\n\n"
-            f"<i>ថ្ងៃទី: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+            f"🆓 Free: <b>{stats['free']}</b>\n\n"
+            f"⬇️ Downloads: <b>{total_downloads}</b>\n\n"
+            f"💰 Revenue: <b>${revenue:.2f}</b>\n\n"
+            f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
         )
-        
         await message.answer(text, parse_mode="HTML")
-        
+
     except Exception as e:
         logger.error(f"Stats error: {e}")
-        await message.answer(f"❌ មានបញ្ហា: {escape(str(e))}", parse_mode="HTML")
+        await message.answer(f"❌ Error: {escape(str(e))}", parse_mode="HTML")
 
 
 @router.message(Command("approve"))
 async def cmd_approve(message: Message):
-    """Admin: Approve premium for user."""
+    """Admin: Grant premium status to a user."""
+    # ✅ FIX 2.2: Respond instead of silent return
     if message.from_user.id != ADMIN_ID:
+        await message.answer("⚠️ រកមិនឃើញពាក្យបញ្ជានេះទេ។")
         return
 
     try:
         target_id = int(message.text.split()[1])
         success = await db.set_premium(target_id)
-        
+
         if success:
-            await message.answer(f"✅ អ្នកប្រើ {target_id} ក្លាយជា PREMIUM ហើយ។")
+            await message.answer(f"✅ User {target_id} → PREMIUM ហើយ។")
             await message.bot.send_message(
-                target_id, 
-                "🎉 <b>អបអរសាទរ!</b> គណនីរបស់អ្នកត្រូវបាន Upgrade ទៅជា PREMIUM ហើយ! 💎", 
-                parse_mode="HTML"
+                target_id,
+                "🎉 <b>អបអរសាទរ!</b> គណនីរបស់អ្នក Upgrade ទៅ PREMIUM ហើយ! 💎",
+                parse_mode="HTML",
             )
             await send_log(
-                f"👮‍♂️ Admin approved Premium for `{target_id}`",
-                bot=message.bot
+                f"👮 Admin approved Premium: <code>{target_id}</code>",
+                bot=message.bot,
             )
         else:
-            await message.answer("❌ បរាជ័យក្នុងការធ្វើបច្ចុប្បន្នភាពអ្នកប្រើ។ សូមពិនិត្យ ID។")
+            await message.answer("❌ Update បរាជ័យ។ សូមពិនិត្យ ID។")
+
     except (IndexError, ValueError):
-        await message.answer("⚠️ របៀបប្រើប្រាស់: /approve [user_id]")
+        await message.answer("⚠️ ប្រើ: /approve [user_id]")
 
 
-# ====== Payment Handlers ======
+# ─────────────────────────────────────────────
+# Payment Handlers
+# ─────────────────────────────────────────────
 
 @router.callback_query(F.data == "buy_premium")
 async def handle_buy_premium(callback: CallbackQuery):
-    """Show payment QR code."""
-    
+    """Show QR payment image."""
     payment_qr_path = "payment.jpg"
-    
+
     if not os.path.exists(payment_qr_path):
         await callback.message.edit_text(
-            "❌ <b>រកមិនឃើញកូដ QR ទូទាត់ប្រាក់!</b>\n\n"
-            "សូមទាក់ទងអ្នកគ្រប់គ្រង។",
-            parse_mode="HTML"
+            "❌ <b>រកមិនឃើញ QR ទូទាត់!</b>\n\nទាក់ទង Admin។",
+            parse_mode="HTML",
         )
-        logger.error(f"payment.jpg not found!")
+        logger.error("payment.jpg not found!")
         return
-    
-    payment_caption = (
-        "💳 <b>ទូទាត់ប្រាក់ Premium (បង់តែម្តង)</b>\n\n"
-        f"💎 <b>តម្លៃ:</b> <b>${PREMIUM_PRICE:.2f}</b>\n"
-        "♾️ <b>ទទួលបាន:</b> ទាញយកមិនកំណត់ + គុណភាព 1080p\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "📱 <b>របៀបបង់ប្រាក់:</b>\n\n"
-        "1️⃣ ស្កេន QR Code ខាងក្រោម\n"
-        f"2️⃣ បង់ចំនួន <b>${PREMIUM_PRICE:.2f}</b>\n"
-        "3️⃣ ថតរូបវិក័យបត្រ (Screenshot)\n"
-        "4️⃣ ផ្ញើវិក័យបត្រមកទីនេះវិញ (ជារូបភាព)\n"
-        "5️⃣ រង់ចាំ Admin អនុញ្ញាត (/approve)\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "♾️ <b>រយៈពេលសុពលភាព:</b> ពេញមួយជីវិត (មិនផុតកំណត់)\n\n"
-        f"🆔 <b>User ID របស់អ្នក:</b> <code>{callback.from_user.id}</code>\n"
-        "<i>(សូមរក្សាទុក ID នេះ)</i>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🎁 <b>អត្ថប្រយោជន៍ Premium:</b>\n"
-        "• ទាញយកមិនកំណត់ ♾️\n"
-        "• គុណភាព 1080p 🎬\n"
-        "• ល្បឿនលឿន 🚀\n"
-        "• ជំនួយអាទិភាព 💬"
+
+    caption = (
+        f"💳 <b>Premium (បង់តែម្តង)</b>\n\n"
+        f"💎 តម្លៃ: <b>${PREMIUM_PRICE:.2f}</b>\n"
+        "♾️ ទាញយកមិនកំណត់ + 1080p\n\n"
+        "📱 <b>របៀបបង់:</b>\n"
+        "1️⃣ ស្កេន QR Code\n"
+        f"2️⃣ បង់ <b>${PREMIUM_PRICE:.2f}</b>\n"
+        "3️⃣ ថតរូប Screenshot\n"
+        "4️⃣ ផ្ញើ Screenshot មកខ្ញុំ\n"
+        "5️⃣ រង់ Admin អនុញ្ញាត\n\n"
+        f"🆔 User ID: <code>{callback.from_user.id}</code>"
     )
-    
+
     try:
         await callback.message.delete()
-        
-        photo = FSInputFile(payment_qr_path)
         await callback.message.answer_photo(
-            photo=photo,
-            caption=payment_caption,
-            parse_mode="HTML"
+            photo=FSInputFile(payment_qr_path),
+            caption=caption,
+            parse_mode="HTML",
         )
-        
         await send_log(
             f"💰 Premium Interest\n"
-            f"User: {callback.from_user.full_name} (`{callback.from_user.id}`)",
-            bot=callback.bot
+            f"User: {escape(callback.from_user.full_name)} "
+            f"(<code>{callback.from_user.id}</code>)",
+            bot=callback.bot,
         )
-        
     except Exception as e:
-        logger.error(f"Error showing QR: {e}")
-        await callback.answer("❌ មានបញ្ហា។ សូមព្យាយាមម្តងទៀត។", show_alert=True)
+        logger.error(f"QR show error: {e}")
+        await callback.answer("❌ មានបញ្ហា។ ព្យាយាមម្តងទៀត។", show_alert=True)
 
 
 @router.callback_query(F.data == "premium_info")
 async def handle_premium_info(callback: CallbackQuery):
     """Show premium benefits."""
-
-    info_text = (
-        "💎 <b>សមាជិកភាព Premium ពេញមួយជីវិត</b>\n\n"
-        f"💰 <b>តម្លៃ:</b> <b>${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "<b>📥 ការទាញយក:</b>\n"
-        "✅ ទាញយកមិនកំណត់ជារៀងរហូត\n"
-        "✅ គ្មានការកំណត់ប្រចាំថ្ងៃ/ខែ\n"
-        "✅ គាំទ្រគ្រប់វេទិកា\n"
-        "✅ គុណភាពខ្ពស់ (រហូតដល់ 1080p)\n\n"
-        "<b>⚡ ប្រតិបត្តិការ:</b>\n"
-        "🚀 ជួរអាទិភាពក្នុងការទាញយក\n"
-        "🚀 ល្បឿនទាញយកលឿន\n\n"
-        "<b>🎯 ជំនួយ:</b>\n"
-        "💬 ជំនួយអាទិភាព\n\n"
-        "<b>💵 ទូទាត់តែម្តង:</b>\n"
-        f"• បង់ <b>${PREMIUM_PRICE:.2f}</b> តែម្តង\n"
-        "• ប្រើរហូត (មិនផុតកំណត់)"
+    text = (
+        f"💎 <b>Premium ពេញមួយជីវិត</b>\n\n"
+        f"💰 <b>តម្លៃ: ${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)\n\n"
+        "✅ ទាញយកមិនកំណត់ ♾️\n"
+        "✅ គុណភាព 1080p 🎬\n"
+        "✅ ល្បឿនលឿន 🚀\n"
+        "✅ គ្រប់វេទិកា\n"
+        "✅ ជំនួយអាទិភាព 💬\n\n"
+        "<b>បង់តែម្តង — ប្រើរហូត!</b>"
     )
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"💳 ទិញ Premium ${PREMIUM_PRICE:.2f}",
-            callback_data="buy_premium",
-        )],
-        [InlineKeyboardButton(
-            text="❌ បិទ",
-            callback_data="close_info",
-        )],
-    ])
-
-    await callback.message.edit_text(info_text, parse_mode="HTML", reply_markup=keyboard)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"💳 ទិញ ${PREMIUM_PRICE:.2f}",
+                    callback_data="buy_premium",
+                )
+            ],
+            [InlineKeyboardButton(text="❌ បិទ", callback_data="close_info")],
+        ]
+    )
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "close_info")
 async def handle_close_info(callback: CallbackQuery):
-    """Close info message."""
     await callback.message.delete()
 
 
+# ─────────────────────────────────────────────
+# Receipt Handler (Photo Upload)
+# ─────────────────────────────────────────────
+
 @router.message(F.photo)
 async def handle_receipt(message: Message):
-    """Handle payment receipt."""
+    """Forward payment receipt photo to log channel."""
+    # ✅ FIX 2.3: Guard against LOG_CHANNEL_ID being None
+    if not LOG_CHANNEL_ID:
+        logger.warning("handle_receipt: LOG_CHANNEL_ID not configured")
+        await message.answer(
+            "✅ <b>ទទួលបានរូបភាព!</b>\n"
+            "សូមទាក់ទង Admin ដោយផ្ទាល់ ព្រោះ channel មិនទាន់ configured។",
+            parse_mode="HTML",
+        )
+        return
+
     caption = escape(message.caption or "No caption")
     user_name = escape(message.from_user.full_name)
-    user_info = f"User: {user_name} (<code>{message.from_user.id}</code>)"
-    
-    await message.bot.send_photo(
-        chat_id=LOG_CHANNEL_ID,
-        photo=message.photo[-1].file_id,
-        caption=f"🧾 <b>ទទួលបានវិក័យបត្រទូទាត់ប្រាក់</b>\n\n{user_info}\n📝 ចំណាំ: {caption}\n\n👉 ប្រើ <code>/approve {message.from_user.id}</code> ដើម្បីអនុម័ត។",
-        parse_mode="HTML"
-    )
-    
-    await message.answer(
-        "✅ <b>ទទួលវិក័យបត្ររួចរាល់!</b>\n"
-        "យើងនឹងពិនិត្យ និង upgrade គណនីរបស់អ្នកក្នុងពេលឆាប់ៗ។",
-        parse_mode="HTML"
-    )
+    user_id = message.from_user.id
+
+    try:
+        await message.bot.send_photo(
+            chat_id=LOG_CHANNEL_ID,
+            photo=message.photo[-1].file_id,
+            caption=(
+                "🧾 <b>វិក័យបត្រទូទាត់</b>\n\n"
+                f"👤 {user_name}\n"
+                f"🆔 <code>{user_id}</code>\n"
+                f"📝 {caption}\n\n"
+                f"👉 <code>/approve {user_id}</code>"
+            ),
+            parse_mode="HTML",
+        )
+        await message.answer(
+            "✅ <b>ទទួលវិក័យបត្ររួចរាល់!</b>\n"
+            "Admin នឹង Upgrade គណនីអ្នកឆាប់ៗ។",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Receipt forward error: {e}")
+        await message.answer(
+            "⚠️ មានបញ្ហា។ សូមទាក់ទង Admin ដោយផ្ទាល់។",
+            parse_mode="HTML",
+        )

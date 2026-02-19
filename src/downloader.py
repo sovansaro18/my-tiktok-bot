@@ -30,11 +30,12 @@ IMAGE_EXTS = {"jpg", "jpeg", "png", "webp"}
 class Downloader:
     """
     Hybrid video/audio downloader with pre-download size checking.
-    
+
     Platform Priority:
-    - TikTok: Cobalt API → yt-dlp
-    - Facebook: Multi-API → yt-dlp
-    - Others: yt-dlp
+    - TikTok : Cobalt API v7 → yt-dlp (H.264 forced)
+    - Facebook: Multi-API   → yt-dlp
+    - Pinterest: Direct MP4 → yt-dlp
+    - Others : yt-dlp
     """
 
     USER_AGENT = (
@@ -45,23 +46,30 @@ class Downloader:
 
     USER_AGENTS = [
         USER_AGENT,
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
+        (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            "Version/17.6 Mobile/15E148 Safari/604.1"
+        ),
     ]
 
     EXTRACTOR_ARGS = {
-        'youtube': {
-            # Prefer clients that are typically more resilient to YouTube changes.
-            # See yt-dlp docs for supported clients.
-            'player_client': ['tv', 'android_sdkless', 'web_safari', 'ios', 'android'],
-            'skip': ['dash', 'hls'],
+        "youtube": {
+            # Clients ordered by reliability — rotated per retry attempt
+            "player_client": ["tv", "android_sdkless", "web_safari", "ios", "android"],
+            "skip": ["dash", "hls"],
         },
-        'instagram': {
-            'api_hostname': 'i.instagram.com',
-        }
+        "instagram": {
+            "api_hostname": "i.instagram.com",
+        },
     }
 
-    def __init__(self, max_workers: int = 2):
+    def __init__(self, max_workers: int = 4):
+        # ✅ FIX 3.2: Increased from 2 → 4 workers to reduce download queue wait
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.max_retries = 3
         self._shutdown = False
@@ -77,53 +85,53 @@ class Downloader:
         if not self._shutdown:
             self.shutdown(wait=False)
 
+    # ─────────────────────────────────────────────
+    # Platform Detection & URL Normalisation
+    # ─────────────────────────────────────────────
+
     def _detect_platform(self, url: str) -> str:
-        """Detect platform from URL."""
+        """Detect platform from URL string."""
         url_lower = url.lower()
-        
-        if any(domain in url_lower for domain in ['youtube.com', 'youtu.be']):
-            return 'youtube'
-        elif any(domain in url_lower for domain in ['tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com']):
-            return 'tiktok'
-        elif any(domain in url_lower for domain in ['facebook.com', 'fb.watch', 'fb.com']):
-            return 'facebook'
-        elif any(domain in url_lower for domain in ['instagram.com', 'instagr.am']):
-            return 'instagram'
-        elif any(domain in url_lower for domain in ['twitter.com', 'x.com', 't.co']):
-            return 'twitter'
-        elif any(domain in url_lower for domain in ['pinterest.com', 'pin.it']):
-            return 'pinterest'
-        
-        return 'other'
+        if any(d in url_lower for d in ["youtube.com", "youtu.be"]):
+            return "youtube"
+        if any(d in url_lower for d in ["tiktok.com", "vm.tiktok.com", "vt.tiktok.com"]):
+            return "tiktok"
+        if any(d in url_lower for d in ["facebook.com", "fb.watch", "fb.com"]):
+            return "facebook"
+        if any(d in url_lower for d in ["instagram.com", "instagr.am"]):
+            return "instagram"
+        if any(d in url_lower for d in ["twitter.com", "x.com", "t.co"]):
+            return "twitter"
+        if any(d in url_lower for d in ["pinterest.com", "pin.it"]):
+            return "pinterest"
+        return "other"
 
     def _normalize_youtube_url(self, url: str) -> str:
-        """Normalize YouTube Shorts URLs into watch?v= URLs for better extractor stability."""
+        """Convert YouTube Shorts URLs to standard watch?v= format."""
         try:
             parsed = urlparse(url)
-            host = (parsed.hostname or '').lower()
-            path = parsed.path or ''
-
-            if host.endswith('youtube.com') and path.startswith('/shorts/'):
-                video_id = path.split('/shorts/', 1)[1].split('/', 1)[0]
+            host = (parsed.hostname or "").lower()
+            path = parsed.path or ""
+            if host.endswith("youtube.com") and path.startswith("/shorts/"):
+                video_id = path.split("/shorts/", 1)[1].split("/", 1)[0]
                 if video_id:
                     qs = parse_qs(parsed.query)
-                    # preserve 'si' if present (not required, but harmless)
-                    si = qs.get('si', [None])[0]
-                    new = f"https://www.youtube.com/watch?v={video_id}"
+                    si = qs.get("si", [None])[0]
+                    new_url = f"https://www.youtube.com/watch?v={video_id}"
                     if si:
-                        new += f"&si={si}"
-                    return new
+                        new_url += f"&si={si}"
+                    return new_url
         except Exception:
-            return url
+            pass
         return url
 
     async def _resolve_redirect(self, url: str) -> str:
-        """Resolve URL shorteners (e.g., pin.it) to their final destination."""
+        """Follow URL redirects (e.g., pin.it short links)."""
         timeout = aiohttp.ClientTimeout(total=20)
         headers = {
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
+            "User-Agent": self.USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
         }
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             try:
@@ -132,387 +140,362 @@ class Downloader:
             except Exception:
                 return url
 
-    async def _download_direct_mp4(self, mp4_url: str, title: str = "pinterest") -> Dict[str, Any]:
-        """Download a direct MP4 URL via aiohttp (used for Pinterest fallback)."""
-        timeout = aiohttp.ClientTimeout(total=120)
-        headers = {'User-Agent': self.USER_AGENT}
-        file_id = uuid.uuid4().hex
-        out_path = os.path.join(DOWNLOAD_DIR, f"{file_id}.mp4")
+    # ─────────────────────────────────────────────
+    # yt-dlp Options Builder
+    # ─────────────────────────────────────────────
 
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            # Pre-check size when possible
-            try:
-                async with session.head(mp4_url, allow_redirects=True) as head:
-                    size = head.headers.get('Content-Length')
-                    if size and size.isdigit() and int(size) > MAX_FILE_SIZE:
-                        size_mb = int(size) / 1024 / 1024
-                        limit_mb = MAX_FILE_SIZE / 1024 / 1024
-                        return {
-                            "status": "error",
-                            "message": f"File too large: {size_mb:.1f}MB (limit: {limit_mb:.0f}MB)",
-                            "size": int(size),
-                        }
-            except Exception:
-                pass
-
-            async with session.get(mp4_url, allow_redirects=True) as resp:
-                if resp.status >= 400:
-                    return {"status": "error", "message": f"HTTP {resp.status} while fetching media"}
-                total = 0
-                with open(out_path, 'wb') as f:
-                    async for chunk in resp.content.iter_chunked(64 * 1024):
-                        if not chunk:
-                            continue
-                        total += len(chunk)
-                        if total > MAX_FILE_SIZE:
-                            try:
-                                os.remove(out_path)
-                            except Exception:
-                                pass
-                            limit_mb = MAX_FILE_SIZE / 1024 / 1024
-                            return {"status": "error", "message": f"File too large (limit: {limit_mb:.0f}MB)"}
-                        f.write(chunk)
-
-        return {
-            "status": "success",
-            "file_path": out_path,
-            "title": title or "Pinterest Video",
-            "duration": 0,
-            "uploader": "Pinterest",
-        }
-
-    async def _download_pinterest(self, url: str, download_type: str = "video") -> Dict[str, Any]:
-        """Pinterest fallback downloader.
-
-        Pinterest often blocks automated API calls used by yt-dlp. This fallback tries to:
-        1) resolve pin.it short links
-        2) fetch the pin HTML page
-        3) extract a direct mp4 URL (v.pinimg.com / video.pinimg.com)
+    def _get_opts(
+        self,
+        download_type: str = "video",
+        url: str = "",
+        check_only: bool = False,
+    ) -> Dict[str, Any]:
         """
-        if download_type != "video":
-            return {"status": "error", "message": "Pinterest supports video only"}
+        Build yt-dlp options tailored to platform and download type.
 
-        final_url = await self._resolve_redirect(url)
-        # Try to construct a canonical pin URL if an ID is visible
-        m = re.search(r"/pin/(\d+)", final_url)
-        if m:
-            final_url = f"https://www.pinterest.com/pin/{m.group(1)}/"
-
-        timeout = aiohttp.ClientTimeout(total=25)
-        headers = {
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            try:
-                async with session.get(final_url, allow_redirects=True) as resp:
-                    html = await resp.text(errors='ignore')
-            except Exception as e:
-                return {"status": "error", "message": f"Pinterest fetch failed: {e}"}
-
-        # Try to get a title
-        title_match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
-        title = title_match.group(1).strip() if title_match else "Pinterest Video"
-
-        # Extract direct MP4 URL
-        mp4_candidates = []
-        mp4_candidates += re.findall(r"https://v\.pinimg\.com[^\"\\\s]+\.mp4", html)
-        mp4_candidates += re.findall(r"https://video\.pinimg\.com[^\"\\\s]+\.mp4", html)
-        mp4_candidates += re.findall(r"https://i\.pinimg\.com[^\"\\\s]+\.mp4", html)
-
-        if not mp4_candidates:
-            # Sometimes URLs are escaped in JSON
-            mp4_candidates += [
-                u.replace('\\u002F', '/').replace('\\/', '/')
-                for u in re.findall(r"https:\\/\\/(?:v|video|i)\\.pinimg\\.com[^\"]+?\\.mp4", html)
-            ]
-
-        # If no MP4 found, try to extract an HLS manifest (.m3u8) and let yt-dlp/ffmpeg handle it
-        m3u8_candidates = []
-        if not mp4_candidates:
-            m3u8_candidates += re.findall(r"https://(?:v|video|i)\.pinimg\.com[^\"\s]+\.m3u8", html)
-            if not m3u8_candidates:
-                m3u8_candidates += [
-                    u.replace('\\u002F', '/').replace('\\/', '/')
-                    for u in re.findall(r"https:\\/\\/(?:v|video|i)\.pinimg\.com[^\"]+?\.m3u8", html)
-                ]
-
-        if not mp4_candidates and m3u8_candidates:
-            # Use yt-dlp on a direct manifest URL (avoids Pinterest extractor)
-            return await self.download_with_ytdlp(m3u8_candidates[0], download_type)
-
-        if not mp4_candidates:
-            return {
-                "status": "error",
-                "message": (
-                    "Pinterest is blocking automated downloads right now. "
-                    "Try again later or provide cookies.txt (COOKIES_FILE) for authenticated access."
-                ),
-            }
-
-        # Use the first candidate
-        mp4_url = mp4_candidates[0]
-        return await self._download_direct_mp4(mp4_url, title=title)
-
-    def _get_opts(self, download_type: str = "video", url: str = "", check_only: bool = False) -> Dict[str, Any]:
-        """Get yt-dlp options based on platform and download type."""
+        Key changes:
+        ✅ FIX 1.1: TikTok branch now forces H.264 format string +
+           FFmpeg re-encoding postprocessor so Telegram can play the video.
+        """
         platform = self._detect_platform(url)
-        logger.info(f"🔍 Platform: {platform}")
+        logger.info(f"🔍 Platform detected: {platform}")
 
         common_opts: Dict[str, Any] = {
-            'quiet': False,
-            'no_warnings': False,
-            'noplaylist': True,
-            'socket_timeout': 30,
-            'retries': 10,
-            'fragment_retries': 10,
-            'verbose': True,
-            'logger': logger,
-            'nocheckcertificate': True,
-            
-            'http_headers': {
-                'User-Agent': self.USER_AGENT,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Cache-Control': 'max-age=0',
+            "quiet": False,
+            "no_warnings": False,
+            "noplaylist": True,
+            "socket_timeout": 30,
+            "retries": 10,
+            "fragment_retries": 10,
+            "verbose": True,
+            "logger": logger,
+            "nocheckcertificate": True,
+            "http_headers": {
+                "User-Agent": self.USER_AGENT,
+                "Accept": (
+                    "text/html,application/xhtml+xml,"
+                    "application/xml;q=0.9,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "DNT": "1",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Cache-Control": "max-age=0",
             },
-            
-            'extractor_args': self.EXTRACTOR_ARGS,
-            'sleep_interval_requests': 1,
-            'ignoreerrors': False,
-            'no_color': True,
+            "extractor_args": self.EXTRACTOR_ARGS,
+            "sleep_interval_requests": 1,
+            "ignoreerrors": False,
+            "no_color": True,
         }
 
-        # If only checking metadata, don't download
         if not check_only:
-            common_opts['outtmpl'] = f'{DOWNLOAD_DIR}/%(id)s.%(ext)s'
-            common_opts['max_filesize'] = MAX_FILE_SIZE
+            common_opts["outtmpl"] = f"{DOWNLOAD_DIR}/%(id)s.%(ext)s"
+            common_opts["max_filesize"] = MAX_FILE_SIZE
 
+        # Attach cookies file if it exists
         if os.path.exists(COOKIES_FILE):
-            common_opts['cookiefile'] = COOKIES_FILE
-            logger.info(f"🍪 Using cookies from: {COOKIES_FILE}")
+            common_opts["cookiefile"] = COOKIES_FILE
+            logger.info(f"🍪 Using cookies: {COOKIES_FILE}")
 
-        if platform == 'youtube':
+        # ── Platform-specific overrides ──────────────────────────────
+
+        if platform == "youtube":
             common_opts.update({
-                'age_limit': None,
-                'sleep_interval': 2,
-                'geo_bypass': True,
-            })
-            
-        elif platform == 'instagram':
-            common_opts.update({
-                'http_headers': {
-                    'User-Agent': self.USER_AGENT,
-                    'Accept': '*/*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Referer': 'https://www.instagram.com/',
-                    'Origin': 'https://www.instagram.com',
-                    'X-IG-App-ID': '936619743392459',
-                },
-                'format': 'best',
-            })
-            
-        elif platform == 'facebook':
-            common_opts.update({
-                'http_headers': {
-                    'User-Agent': self.USER_AGENT,
-                    'Referer': 'https://www.facebook.com/',
-                    'Origin': 'https://www.facebook.com',
-                },
-                'format': 'best',
+                "age_limit": None,
+                "sleep_interval": 2,
+                "geo_bypass": True,
             })
 
-        # Format selection
+        elif platform == "tiktok":
+            # ✅ FIX 1.1: Force H.264 (AVC) codec so Telegram renders
+            # the video correctly. Without this, yt-dlp may pick H.265
+            # (HEVC) which Telegram displays as a black screen.
+            #
+            # Format priority:
+            #   1. H.264 mp4 up to 1080p            (best case)
+            #   2. Any H.264 mp4                     (good)
+            #   3. Any mp4 (may be H.265)            (acceptable — re-encoded below)
+            #   4. Best available                    (last resort)
+            common_opts["format"] = (
+                "bestvideo[vcodec^=avc1][height<=1080][ext=mp4]"
+                "+bestaudio[ext=m4a]/"
+                "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio/"
+                "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
+                "best[ext=mp4]/best"
+            )
+
+            if not check_only:
+                # Merge to mp4 and re-encode with FFmpeg to guarantee
+                # H.264 output even when source is H.265
+                common_opts["merge_output_format"] = "mp4"
+                common_opts["postprocessors"] = [
+                    {
+                        # ✅ Re-encode video → H.264, audio → AAC
+                        "key": "FFmpegVideoConvertor",
+                        "preferedformat": "mp4",
+                    }
+                ]
+                common_opts["postprocessor_args"] = {
+                    # Force libx264 + AAC so Telegram always plays the file
+                    "videoconvertor": [
+                        "-vcodec", "libx264",
+                        "-acodec", "aac",
+                        "-crf", "23",          # quality level (18=best, 28=worst)
+                        "-preset", "fast",     # encoding speed vs file size
+                        "-movflags", "+faststart",  # web-optimised mp4
+                    ]
+                }
+
+        elif platform == "instagram":
+            common_opts.update({
+                "http_headers": {
+                    "User-Agent": self.USER_AGENT,
+                    "Accept": "*/*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://www.instagram.com/",
+                    "Origin": "https://www.instagram.com",
+                    "X-IG-App-ID": "936619743392459",
+                },
+                "format": "best",
+            })
+
+        elif platform == "facebook":
+            common_opts.update({
+                "http_headers": {
+                    "User-Agent": self.USER_AGENT,
+                    "Referer": "https://www.facebook.com/",
+                    "Origin": "https://www.facebook.com",
+                },
+                "format": "best",
+            })
+
+        # ── Download type overrides ───────────────────────────────────
+
         if download_type == "audio":
             common_opts.update({
-                'format': 'bestaudio/best',
-                'postprocessors': ([{
-                    'key': 'FFmpegExtractAudio',
-                    # mp3 tends to be the most compatible with Telegram audio
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }] if not check_only else [])
+                "format": "bestaudio/best",
+                "postprocessors": (
+                    [
+                        {
+                            "key": "FFmpegExtractAudio",
+                            "preferredcodec": "mp3",
+                            "preferredquality": "192",
+                        }
+                    ]
+                    if not check_only
+                    else []
+                ),
             })
-        elif platform == 'youtube':
-            common_opts['format'] = (
-                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
-                'bestvideo[height<=1080]+bestaudio/'
-                'best[height<=1080][ext=mp4]/'
-                'best[ext=mp4]/'
-                'best'
+
+        elif platform == "youtube":
+            # YouTube: prefer H.264 mp4 up to 1080p
+            common_opts["format"] = (
+                "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
+                "bestvideo[height<=1080]+bestaudio/"
+                "best[height<=1080][ext=mp4]/"
+                "best[ext=mp4]/best"
             )
             if not check_only:
-                common_opts['merge_output_format'] = 'mp4'
+                common_opts["merge_output_format"] = "mp4"
 
         return common_opts
 
+    # ─────────────────────────────────────────────
+    # Size Check (yt-dlp metadata probe)
+    # ─────────────────────────────────────────────
+
     def _check_size_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Check video size WITHOUT downloading.
-        Extract metadata only to verify file size.
+        Probe video metadata WITHOUT downloading to validate file size.
+        Returns status='ok' or status='error'.
         """
         with yt_dlp.YoutubeDL(opts) as ydl:
             try:
-                logger.info(f"🔍 Checking video size for: {url}")
+                logger.info(f"📏 Probing size for: {url}")
                 info = ydl.extract_info(url, download=False)
-                
+
                 if not info:
                     return {"status": "error", "message": "Cannot extract video info"}
-                
-                if 'entries' in info:
-                    if not info['entries']:
+
+                if "entries" in info:
+                    if not info["entries"]:
                         return {"status": "error", "message": "No videos found"}
-                    info = info['entries'][0]
-                
-                # Get file size
-                filesize = info.get('filesize') or info.get('filesize_approx')
-                
+                    info = info["entries"][0]
+
+                filesize = info.get("filesize") or info.get("filesize_approx")
+
                 if filesize and filesize > MAX_FILE_SIZE:
                     size_mb = filesize / 1024 / 1024
                     limit_mb = MAX_FILE_SIZE / 1024 / 1024
                     return {
                         "status": "error",
-                        "message": f"File too large: {size_mb:.1f}MB (limit: {limit_mb:.0f}MB)",
-                        "size": filesize
+                        "message": (
+                            f"File too large: {size_mb:.1f}MB "
+                            f"(limit: {limit_mb:.0f}MB)"
+                        ),
+                        "size": filesize,
                     }
-                
-                # Return metadata
+
                 return {
                     "status": "ok",
                     "size": filesize,
-                    "title": info.get('title', 'Unknown'),
-                    "duration": info.get('duration', 0)
+                    "title": info.get("title", "Unknown"),
+                    "duration": info.get("duration", 0),
                 }
-                
+
             except Exception as e:
-                logger.error(f"❌ Size check error: {e}")
-                # If size check fails, allow download (will be caught later)
+                logger.error(f"❌ Size probe error: {e}")
+                # Allow download to proceed — actual size will be enforced during download
                 return {"status": "ok", "size": None}
 
     def _probe_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
-        """Lightweight extractor probe (download=False)."""
+        """Lightweight metadata probe (no download)."""
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
 
+    # ─────────────────────────────────────────────
+    # Core yt-dlp Download
+    # ─────────────────────────────────────────────
+
     def _download_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
-        """Synchronous yt-dlp download (runs in thread pool)."""
+        """Blocking yt-dlp download — must be run inside executor."""
         with yt_dlp.YoutubeDL(opts) as ydl:
             try:
-                logger.info(f"🔄 Downloading: {url}")
+                logger.info(f"⬇️ yt-dlp downloading: {url}")
                 info = ydl.extract_info(url, download=True)
-                
+
                 if not info:
                     return {"status": "error", "message": "Cannot extract video info"}
-                
-                if 'entries' in info:
-                    info = info['entries'][0]
+
+                if "entries" in info:
+                    info = info["entries"][0]
 
                 filename = ydl.prepare_filename(info)
-                
-                if opts.get('postprocessors'):
+
+                # Resolve final filename after postprocessing (e.g., .mp3)
+                if opts.get("postprocessors"):
                     base, _ = os.path.splitext(filename)
                     try:
-                        pp = (opts.get('postprocessors') or [])[0] or {}
-                        ext = (pp.get('preferredcodec') or 'mp3').strip().lower()
+                        pp = (opts.get("postprocessors") or [])[0] or {}
+                        ext = (
+                            pp.get("preferredcodec")
+                            or pp.get("preferedformat")
+                            or "mp4"
+                        ).strip().lower()
                     except Exception:
-                        ext = 'mp3'
+                        ext = "mp4"
                     filename = f"{base}.{ext}"
 
                 if not os.path.exists(filename):
-                    return {"status": "error", "message": "File not found after download"}
+                    # FFmpegVideoConvertor outputs .mp4 regardless of source ext
+                    base, _ = os.path.splitext(filename)
+                    mp4_candidate = f"{base}.mp4"
+                    if os.path.exists(mp4_candidate):
+                        filename = mp4_candidate
+                    else:
+                        return {
+                            "status": "error",
+                            "message": "File not found after download",
+                        }
 
                 return {
                     "status": "success",
                     "file_path": filename,
-                    "title": info.get('title', 'Unknown'),
-                    "duration": info.get('duration', 0),
-                    "uploader": info.get('uploader', 'Unknown')
+                    "title": info.get("title", "Unknown"),
+                    "duration": info.get("duration", 0),
+                    "uploader": info.get("uploader", "Unknown"),
                 }
 
             except yt_dlp.utils.DownloadError as e:
                 error_msg = str(e)
                 logger.error(f"❌ DownloadError: {error_msg}")
-                
+
+                # Map known error strings to friendly messages
                 if "File is larger than" in error_msg or "too large" in error_msg.lower():
                     return {"status": "error", "message": "File too large (>49MB)"}
-                elif "Video unavailable" in error_msg or "Private video" in error_msg:
+                if "Video unavailable" in error_msg or "Private video" in error_msg:
                     return {"status": "error", "message": "Video unavailable or private"}
-                elif "Sign in to confirm" in error_msg:
+                if "Sign in to confirm" in error_msg:
                     return {"status": "error", "message": "Age-restricted. Need cookies.txt"}
-                elif "HTTP Error 429" in error_msg:
+                if "HTTP Error 429" in error_msg:
                     return {"status": "error", "message": "Rate limited. Try in 5 minutes"}
-                elif "HTTP Error 403" in error_msg:
+                if "HTTP Error 403" in error_msg:
                     return {"status": "error", "message": "Access forbidden. May be region-blocked"}
-                elif "Failed to extract any player response" in error_msg:
+                if "Failed to extract any player response" in error_msg:
                     return {
                         "status": "error",
-                        "message": "YouTube បានប្តូររចនាសម្ព័ន្ធ។ សូមព្យាយាមម្ដងទៀតក្រោយ (bot នឹង update ឲ្យស្វ័យប្រវត្តិលើ Render)។",
+                        "message": (
+                            "YouTube បានប្តូររចនាសម្ព័ន្ធ។ "
+                            "សូមព្យាយាមម្ដងទៀតក្រោយ។"
+                        ),
                     }
-                else:
-                    return {"status": "error", "message": f"Download failed: {error_msg[:200]}"}
-                    
+                return {
+                    "status": "error",
+                    "message": f"Download failed: {error_msg[:200]}",
+                }
+
             except Exception as e:
-                logger.error(f"❌ Error: {e}", exc_info=True)
+                logger.error(f"❌ Unexpected error: {e}", exc_info=True)
                 return {"status": "error", "message": f"Error: {str(e)[:200]}"}
 
+    # ─────────────────────────────────────────────
+    # TikTok Slideshow / Photo Post Handling
+    # ─────────────────────────────────────────────
+
     def _is_slideshow_info(self, info: Dict[str, Any]) -> bool:
-        """Return True if yt-dlp extracted info looks like a TikTok photo/slideshow."""
+        """Return True if yt-dlp info looks like a TikTok photo slideshow."""
         if not isinstance(info, dict):
             return False
 
-        # Playlist-like entries that are images.
-        if info.get('_type') == 'playlist' and isinstance(info.get('entries'), list):
-            for e in info.get('entries') or []:
-                if not isinstance(e, dict):
+        if info.get("_type") == "playlist" and isinstance(info.get("entries"), list):
+            for entry in info.get("entries") or []:
+                if not isinstance(entry, dict):
                     continue
-                ext = (e.get('ext') or '').lower()
+                ext = (entry.get("ext") or "").lower()
                 if ext in IMAGE_EXTS:
                     return True
-                url = e.get('url')
-                if isinstance(url, str) and any(url.lower().endswith('.' + x) for x in IMAGE_EXTS):
+                url = entry.get("url")
+                if isinstance(url, str) and any(
+                    url.lower().endswith("." + x) for x in IMAGE_EXTS
+                ):
                     return True
 
-        # Sometimes direct info has image ext.
-        ext = (info.get('ext') or '').lower()
-        if ext in IMAGE_EXTS:
-            return True
+        ext = (info.get("ext") or "").lower()
+        return ext in IMAGE_EXTS
 
-        return False
-
-    def _download_tiktok_slideshow_sync(self, url: str, base_opts: Dict[str, Any]) -> Dict[str, Any]:
-        """Download TikTok photo/slideshow as a set of image files."""
-        # Put each slideshow into its own folder
+    def _download_tiktok_slideshow_sync(
+        self, url: str, base_opts: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Download a TikTok photo/slideshow post as individual image files."""
         folder = os.path.join(DOWNLOAD_DIR, f"tiktok_slideshow_{uuid.uuid4().hex}")
         os.makedirs(folder, exist_ok=True)
 
         opts = dict(base_opts)
         opts.update({
-            'noplaylist': False,
-            'outtmpl': os.path.join(folder, '%(title).80s_%(playlist_index)02d.%(ext)s'),
-            # slideshow posts may have many entries
-            'playlist_items': '1-50',
+            "noplaylist": False,
+            "outtmpl": os.path.join(
+                folder, "%(title).80s_%(playlist_index)02d.%(ext)s"
+            ),
+            "playlist_items": "1-50",
+            # Remove TikTok-specific postprocessors — not needed for images
+            "postprocessors": [],
+            "postprocessor_args": {},
         })
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            title = 'TikTok Photo'
+            title = "TikTok Photo"
             duration = 0
             if isinstance(info, dict):
-                title = info.get('title') or title
-                duration = info.get('duration') or 0
+                title = info.get("title") or title
+                duration = info.get("duration") or 0
 
-        # Collect downloaded images
-        files: list[str] = []
-        for name in sorted(os.listdir(folder)):
-            ext = os.path.splitext(name)[1].lstrip('.').lower()
-            if ext in IMAGE_EXTS:
-                files.append(os.path.join(folder, name))
+        files = [
+            os.path.join(folder, name)
+            for name in sorted(os.listdir(folder))
+            if os.path.splitext(name)[1].lstrip(".").lower() in IMAGE_EXTS
+        ]
 
         if not files:
             return {"status": "error", "message": "No images found for this TikTok link"}
@@ -526,22 +509,164 @@ class Downloader:
             "uploader": "TikTok",
         }
 
-    async def download_with_ytdlp(self, url: str, type: str = "video") -> Dict[str, Any]:
-        """Download using yt-dlp with pre-download size check."""
-        loop = asyncio.get_running_loop()
+    # ─────────────────────────────────────────────
+    # Pinterest Direct MP4 Fallback
+    # ─────────────────────────────────────────────
 
-        # Normalize some URLs first
-        if self._detect_platform(url) == 'youtube':
+    async def _download_direct_mp4(
+        self, mp4_url: str, title: str = "Pinterest Video"
+    ) -> Dict[str, Any]:
+        """Download a known direct MP4 URL via aiohttp (Pinterest fallback)."""
+        timeout = aiohttp.ClientTimeout(total=120)
+        headers = {"User-Agent": self.USER_AGENT}
+        out_path = os.path.join(DOWNLOAD_DIR, f"{uuid.uuid4().hex}.mp4")
+
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            # Pre-flight HEAD check for Content-Length
+            try:
+                async with session.head(mp4_url, allow_redirects=True) as head:
+                    size = head.headers.get("Content-Length")
+                    if size and size.isdigit() and int(size) > MAX_FILE_SIZE:
+                        size_mb = int(size) / 1024 / 1024
+                        limit_mb = MAX_FILE_SIZE / 1024 / 1024
+                        return {
+                            "status": "error",
+                            "message": (
+                                f"File too large: {size_mb:.1f}MB "
+                                f"(limit: {limit_mb:.0f}MB)"
+                            ),
+                            "size": int(size),
+                        }
+            except Exception:
+                pass
+
+            async with session.get(mp4_url, allow_redirects=True) as resp:
+                if resp.status >= 400:
+                    return {
+                        "status": "error",
+                        "message": f"HTTP {resp.status} while fetching media",
+                    }
+                total = 0
+                with open(out_path, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > MAX_FILE_SIZE:
+                            try:
+                                os.remove(out_path)
+                            except Exception:
+                                pass
+                            limit_mb = MAX_FILE_SIZE / 1024 / 1024
+                            return {
+                                "status": "error",
+                                "message": f"File too large (limit: {limit_mb:.0f}MB)",
+                            }
+                        f.write(chunk)
+
+        return {
+            "status": "success",
+            "file_path": out_path,
+            "title": title or "Pinterest Video",
+            "duration": 0,
+            "uploader": "Pinterest",
+        }
+
+    async def _download_pinterest(
+        self, url: str, download_type: str = "video"
+    ) -> Dict[str, Any]:
+        """
+        Pinterest-specific fallback:
+        1. Resolve pin.it short links
+        2. Fetch HTML page
+        3. Extract direct mp4 URL from pinimg.com CDN
+        """
+        if download_type != "video":
+            return {"status": "error", "message": "Pinterest supports video only"}
+
+        final_url = await self._resolve_redirect(url)
+        m = re.search(r"/pin/(\d+)", final_url)
+        if m:
+            final_url = f"https://www.pinterest.com/pin/{m.group(1)}/"
+
+        timeout = aiohttp.ClientTimeout(total=25)
+        headers = {
+            "User-Agent": self.USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            try:
+                async with session.get(final_url, allow_redirects=True) as resp:
+                    html = await resp.text(errors="ignore")
+            except Exception as e:
+                return {"status": "error", "message": f"Pinterest fetch failed: {e}"}
+
+        title_m = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+        title = title_m.group(1).strip() if title_m else "Pinterest Video"
+
+        mp4_candidates: List[str] = []
+        mp4_candidates += re.findall(r"https://v\.pinimg\.com[^\"\\\s]+\.mp4", html)
+        mp4_candidates += re.findall(r"https://video\.pinimg\.com[^\"\\\s]+\.mp4", html)
+        mp4_candidates += re.findall(r"https://i\.pinimg\.com[^\"\\\s]+\.mp4", html)
+
+        if not mp4_candidates:
+            mp4_candidates += [
+                u.replace("\\u002F", "/").replace("\\/", "/")
+                for u in re.findall(
+                    r"https:\\/\\/(?:v|video|i)\\.pinimg\\.com[^\"]+?\\.mp4", html
+                )
+            ]
+
+        # Try HLS manifest if no direct mp4 found
+        if not mp4_candidates:
+            m3u8_candidates: List[str] = []
+            m3u8_candidates += re.findall(
+                r"https://(?:v|video|i)\.pinimg\.com[^\"\s]+\.m3u8", html
+            )
+            if m3u8_candidates:
+                return await self.download_with_ytdlp(m3u8_candidates[0], download_type)
+
+            return {
+                "status": "error",
+                "message": (
+                    "Pinterest is blocking automated downloads. "
+                    "Try again later or provide cookies.txt."
+                ),
+            }
+
+        return await self._download_direct_mp4(mp4_candidates[0], title=title)
+
+    # ─────────────────────────────────────────────
+    # Main yt-dlp Download Orchestrator
+    # ─────────────────────────────────────────────
+
+    async def download_with_ytdlp(
+        self, url: str, type: str = "video"
+    ) -> Dict[str, Any]:
+        """
+        Download via yt-dlp with:
+        - Slideshow detection for TikTok
+        - Pre-download size check (skipped for TikTok — Cobalt handles it)
+        - Retry loop with user-agent + client rotation
+        """
+        loop = asyncio.get_running_loop()
+        platform = self._detect_platform(url)
+
+        if platform == "youtube":
             url = self._normalize_youtube_url(url)
 
-        # TikTok photo/slideshow posts don't have a single media filesize and should be handled separately.
-        if self._detect_platform(url) == 'tiktok' and type == 'video':
+        # ── TikTok slideshow detection ──────────────────────────────
+        if platform == "tiktok" and type == "video":
             try:
                 probe_opts = self._get_opts(type, url, check_only=True)
-                probe_opts['noplaylist'] = False
-                info = await loop.run_in_executor(self.executor, self._probe_sync, url, probe_opts)
+                probe_opts["noplaylist"] = False
+                info = await loop.run_in_executor(
+                    self.executor, self._probe_sync, url, probe_opts
+                )
                 if isinstance(info, dict) and self._is_slideshow_info(info):
-                    logger.info("🖼 Detected TikTok slideshow → downloading images")
+                    logger.info("🖼️ TikTok slideshow detected → downloading images")
                     base_opts = self._get_opts(type, url)
                     return await loop.run_in_executor(
                         self.executor,
@@ -550,146 +675,159 @@ class Downloader:
                         base_opts,
                     )
             except Exception as e:
-                logger.warning(f"TikTok slideshow probe failed, continuing normal flow: {e}")
+                logger.warning(f"TikTok slideshow probe failed, continuing: {e}")
 
-        # STEP 1: Check file size first (without downloading)
-        logger.info("📏 Checking file size before download...")
-        check_opts = self._get_opts(type, url, check_only=True)
-        
-        size_check = await loop.run_in_executor(
-            self.executor,
-            self._check_size_sync,
-            url,
-            check_opts
-        )
-        
-        if size_check["status"] == "error":
-            return size_check
-        
-        # STEP 2: Proceed with actual download
+        # ── Pre-download size check ─────────────────────────────────
+        # ✅ FIX 3.1: Skip size check for TikTok — Cobalt already handles
+        # it upstream, and TikTok rarely returns filesize metadata anyway.
+        # This saves one full yt-dlp round-trip per TikTok download.
+        if platform not in ("tiktok",):
+            logger.info("📏 Checking file size before download...")
+            check_opts = self._get_opts(type, url, check_only=True)
+            size_check = await loop.run_in_executor(
+                self.executor, self._check_size_sync, url, check_opts
+            )
+            if size_check["status"] == "error":
+                return size_check
+
+        # ── Retry loop ──────────────────────────────────────────────
         for attempt in range(1, self.max_retries + 1):
-            # Refresh options to allow per-attempt tweaks
             opts = self._get_opts(type, url)
+
             # Rotate user-agent per attempt
             ua = self.USER_AGENTS[(attempt - 1) % len(self.USER_AGENTS)]
-            opts.setdefault('http_headers', {})['User-Agent'] = ua
+            opts.setdefault("http_headers", {})["User-Agent"] = ua
 
-            # Rotate YouTube client order per attempt (local copy - avoid global mutation)
-            if self._detect_platform(url) == 'youtube':
+            # Rotate YouTube player clients per attempt
+            if platform == "youtube":
                 clients = [
-                    ['tv', 'android_sdkless', 'web_safari'],
-                    ['android_sdkless', 'tv', 'ios'],
-                    ['ios', 'android_sdkless', 'tv'],
+                    ["tv", "android_sdkless", "web_safari"],
+                    ["android_sdkless", "tv", "ios"],
+                    ["ios", "android_sdkless", "tv"],
                 ]
-                extractor_args = dict(opts.get('extractor_args') or {})
-                yt_args = dict(extractor_args.get('youtube') or {})
-                yt_args['player_client'] = clients[(attempt - 1) % len(clients)]
-                extractor_args['youtube'] = yt_args
-                opts['extractor_args'] = extractor_args
+                extractor_args = dict(opts.get("extractor_args") or {})
+                yt_args = dict(extractor_args.get("youtube") or {})
+                yt_args["player_client"] = clients[(attempt - 1) % len(clients)]
+                extractor_args["youtube"] = yt_args
+                opts["extractor_args"] = extractor_args
+
             try:
-                logger.info(f"⬇️ yt-dlp download [Attempt {attempt}/{self.max_retries}]")
-                
+                logger.info(
+                    f"⬇️ yt-dlp attempt {attempt}/{self.max_retries} | {platform}"
+                )
                 result = await loop.run_in_executor(
-                    self.executor, 
-                    self._download_sync, 
-                    url, 
-                    opts
+                    self.executor, self._download_sync, url, opts
                 )
 
                 if result["status"] == "success":
                     return result
-                
-                # Don't retry certain errors
+
+                # Do not retry permanent errors
                 non_retryable = [
-                    "File too large", "unavailable", "private",
-                    "Age-restricted", "region-blocked"
+                    "File too large",
+                    "unavailable",
+                    "private",
+                    "Age-restricted",
+                    "region-blocked",
                 ]
-                
                 if any(err in result["message"] for err in non_retryable):
                     return result
 
                 logger.warning(f"⚠️ Attempt {attempt} failed: {result['message']}")
 
             except Exception as e:
-                logger.error(f"❌ Error (attempt {attempt}): {e}")
+                logger.error(f"❌ Attempt {attempt} exception: {e}")
                 if attempt == self.max_retries:
                     return {"status": "error", "message": "System error"}
-            
+
             if attempt < self.max_retries:
                 await asyncio.sleep(min(2 ** attempt, 10))
 
-        return {"status": "error", "message": f"Failed after {self.max_retries} attempts"}
+        return {
+            "status": "error",
+            "message": f"Failed after {self.max_retries} attempts",
+        }
+
+    # ─────────────────────────────────────────────
+    # Public Entry Point
+    # ─────────────────────────────────────────────
 
     async def download(self, url: str, type: str = "video") -> Dict[str, Any]:
         """
-        Main download function with intelligent platform routing.
+        Route download request to appropriate handler based on platform.
+
+        Routes:
+          TikTok   → Cobalt API v7 → yt-dlp (H.264 forced)
+          Facebook → Facebook Multi-API → yt-dlp
+          Pinterest→ Direct MP4 fallback (no yt-dlp)
+          Others   → yt-dlp
         """
-        
         platform = self._detect_platform(url)
-        
-        # Route 1: TikTok
-        if platform == 'tiktok':
-            # Audio on TikTok is much more reliable via yt-dlp + ffmpeg extraction.
-            if type == 'audio':
+
+        # ── TikTok ─────────────────────────────────────────────────
+        if platform == "tiktok":
+            if type == "audio":
+                # Audio: yt-dlp + FFmpeg is more reliable than Cobalt
                 logger.info("🎵 TikTok audio → yt-dlp")
                 return await self.download_with_ytdlp(url, type)
 
-            # Video: try Cobalt first for classic videos, but always allow yt-dlp to auto-detect slideshows.
-            logger.info("🎵 TikTok video → Cobalt API (fallback yt-dlp / slideshow auto)")
+            # Video: try Cobalt first (no re-encoding needed = faster)
+            logger.info("🎬 TikTok video → Cobalt API v7")
             try:
                 from src.cobalt_api import cobalt_downloader
+
                 result = await cobalt_downloader.download(url, type)
                 if result.get("status") == "success":
+                    logger.info("✅ TikTok via Cobalt API v7")
                     return result
-                logger.warning("⚠️ Cobalt failed or unsupported, falling back to yt-dlp...")
+
+                # Cobalt failed → yt-dlp with H.264 force
+                logger.warning("⚠️ Cobalt failed → yt-dlp (H.264 forced)")
                 return await self.download_with_ytdlp(url, type)
+
             except ImportError:
-                logger.error("❌ cobalt_api.py not found! Using yt-dlp")
+                logger.error("❌ cobalt_api.py not found — using yt-dlp")
                 return await self.download_with_ytdlp(url, type)
             except Exception as e:
-                logger.error(f"❌ Cobalt API error: {e}")
-                logger.info("⚠️ Falling back to yt-dlp...")
+                logger.error(f"❌ Cobalt error: {e}")
                 return await self.download_with_ytdlp(url, type)
-        
-        # Route 2: Facebook → Facebook Multi-API System
-        elif platform == 'facebook':
-            logger.info("📱 Routing to Facebook Multi-API System")
+
+        # ── Facebook ───────────────────────────────────────────────
+        elif platform == "facebook":
+            logger.info("📱 Facebook → Multi-API system")
             try:
                 from src.facebook_api import facebook_downloader
+
                 result = await facebook_downloader.download(url, type)
-                
                 if result["status"] == "success":
-                    logger.info("✅ Facebook API succeeded!")
+                    logger.info("✅ Facebook via Multi-API")
                     return result
-                
-                logger.warning("⚠️ All Facebook APIs failed, trying yt-dlp as last resort...")
+
+                logger.warning("⚠️ Facebook APIs failed → yt-dlp fallback")
                 ytdlp_result = await self.download_with_ytdlp(url, type)
-                
-                if ytdlp_result["status"] == "error":
-                    return result
-                
-                return ytdlp_result
-                
+                # Return Multi-API error if yt-dlp also fails (more descriptive)
+                return ytdlp_result if ytdlp_result["status"] == "success" else result
+
             except ImportError:
-                logger.error("❌ facebook_api.py not found! Using yt-dlp only")
+                logger.error("❌ facebook_api.py not found — using yt-dlp")
                 return await self.download_with_ytdlp(url, type)
             except Exception as e:
                 logger.error(f"❌ Facebook API error: {e}")
-                logger.info("⚠️ Falling back to yt-dlp...")
                 return await self.download_with_ytdlp(url, type)
-        
-        # Route 3: Pinterest → try direct fallback first, then yt-dlp
-        elif platform == 'pinterest':
-            logger.info("📌 Routing to Pinterest direct fallback")
-            direct = await self._download_pinterest(url, type)
-            if direct.get("status") != "success":
-                logger.warning(f"⚠️ Pinterest direct fallback failed: {direct.get('message')}")
-            return direct
 
-        # Route 4: All other platforms → yt-dlp
+        # ── Pinterest ──────────────────────────────────────────────
+        elif platform == "pinterest":
+            logger.info("📌 Pinterest → direct MP4 fallback")
+            result = await self._download_pinterest(url, type)
+            if result.get("status") != "success":
+                logger.warning(f"⚠️ Pinterest direct failed: {result.get('message')}")
+            return result
+
+        # ── All other platforms ────────────────────────────────────
         else:
-            logger.info(f"📹 Using yt-dlp for {platform}")
+            logger.info(f"📹 {platform} → yt-dlp")
             return await self.download_with_ytdlp(url, type)
 
 
+# Global singleton
 downloader = Downloader()

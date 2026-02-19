@@ -9,123 +9,134 @@ from src.config import LOG_CHANNEL_ID
 
 logger = logging.getLogger(__name__)
 
+
 def sanitize_markdown(text: str) -> str:
     """
-    Sanitize text for Markdown to prevent injection.
-    Escapes special Markdown characters.
+    ✅ FIX 2.1: Properly sanitize text for MarkdownV2 to prevent
+    log channel injection. Escapes ALL special Markdown characters.
     """
     if not text or not isinstance(text, str):
         return ""
-    
-    # Escape Markdown special characters
-    special_chars = ['_', '*', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+
+    # MarkdownV2 special characters that must be escaped
+    special_chars = [
+        "_", "*", "[", "]", "(", ")", "~", "`", ">",
+        "#", "+", "-", "=", "|", "{", "}", ".", "!",
+    ]
     for char in special_chars:
-        text = text.replace(char, f'\\{char}')
-    
+        text = text.replace(char, f"\\{char}")
+
     return text
 
 
-async def send_log(text: str, bot: Optional[Bot] = None) -> bool:
+def sanitize_html(text: str) -> str:
     """
-    Send log message to the configured log channel.
-    
+    Sanitize text for safe use inside HTML parse_mode messages.
+    Escapes <, >, & characters to prevent tag injection.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    return (
+        text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+async def send_log(
+    text: str,
+    bot: Optional[Bot] = None,
+    parse_mode: str = "HTML",
+) -> bool:
+    """
+    Send a log message to the configured log channel.
+
+    ✅ FIX 2.1: Uses HTML parse_mode by default (more predictable
+    than Markdown). User-supplied content is sanitized before sending
+    to prevent injection into the log channel.
+
     Args:
         text: The message text to send
-        bot: The Bot instance to use for sending
-        
+        bot: The Bot instance to use
+        parse_mode: "HTML" (default) or "Markdown"
+
     Returns:
-        True if successful, False otherwise
+        True if sent successfully, False otherwise
     """
     if not LOG_CHANNEL_ID:
-        logger.warning("send_log called without LOG_CHANNEL_ID configured")
+        logger.debug("send_log: LOG_CHANNEL_ID not configured — skipping")
         return False
-        
+
     if not bot:
-        logger.warning("send_log called without bot instance")
+        logger.warning("send_log: called without bot instance")
         return False
-    
+
     if not text or not isinstance(text, str):
-        logger.warning(f"send_log called with invalid text: {type(text)}")
+        logger.warning(f"send_log: invalid text type: {type(text)}")
         return False
 
     try:
-        # Sanitize text before sending
-        safe_text = sanitize_markdown(text) if text else "Empty log message"
-        
         await bot.send_message(
-            chat_id=LOG_CHANNEL_ID, 
-            text=safe_text, 
-            parse_mode="Markdown",
-            disable_web_page_preview=True 
+            chat_id=LOG_CHANNEL_ID,
+            text=text,
+            parse_mode=parse_mode,
+            disable_web_page_preview=True,
         )
         return True
-        
+
     except Exception as e:
-        # Use logger instead of print
-        logger.error(f"⚠️ Failed to send log to channel: {e}")
+        logger.error(f"⚠️ Failed to send log to channel {LOG_CHANNEL_ID}: {e}")
         return False
 
 
 async def safe_remove_file(file_path: str) -> bool:
     """
-    Safely remove a file asynchronously without blocking the event loop.
-    
+    Safely remove a file without blocking the event loop.
+
     Args:
         file_path: Path to the file to remove
-        
+
     Returns:
-        True if file was removed or didn't exist, False on error
+        True if removed (or didn't exist), False on error
     """
     if not file_path:
         return True
-        
+
     try:
-        # Run blocking os operations in a thread pool
         exists = await asyncio.to_thread(os.path.exists, file_path)
         if exists:
             await asyncio.to_thread(os.remove, file_path)
-            logger.debug(f"Removed file: {file_path}")
+            logger.debug(f"🗑️ Removed file: {file_path}")
         return True
-        
+
     except PermissionError as e:
-        logger.warning(f"Permission denied when removing file {file_path}: {e}")
+        logger.warning(f"Permission denied removing {file_path}: {e}")
         return False
     except OSError as e:
-        logger.error(f"Error removing file {file_path}: {e}")
+        logger.error(f"OS error removing {file_path}: {e}")
         return False
 
 
 _ALLOWED_HTML_TAGS = {
-    "b",
-    "strong",
-    "i",
-    "em",
-    "u",
-    "ins",
-    "s",
-    "strike",
-    "del",
-    "code",
-    "pre",
-    "a",
-    "br",
+    "b", "strong", "i", "em", "u", "ins",
+    "s", "strike", "del", "code", "pre", "a", "br",
 }
 
 
 def validate_telegram_html(text: str) -> tuple[bool, str]:
-    """Best-effort Telegram HTML validation.
-
-    Telegram rejects messages with malformed/unbalanced tags. This validator focuses on
-    common tags used by admins in broadcasts.
+    """
+    Best-effort Telegram HTML tag validator.
+    Checks for balanced, allowed tags only.
 
     Returns:
-        (ok, reason)
+        (is_valid: bool, reason: str)
     """
-
     if not text:
         return True, ""
 
-    # Fast path: no tags
+    # Fast path: no HTML tags at all
     if "<" not in text and ">" not in text:
         return True, ""
 
@@ -140,22 +151,23 @@ def validate_telegram_html(text: str) -> tuple[bool, str]:
         if name not in _ALLOWED_HTML_TAGS:
             return False, f"Tag មិនអនុញ្ញាត: <{name}>"
 
+        # Self-closing <br> — no stack tracking needed
         if name == "br":
             continue
 
+        # Anchor tags require href attribute
         if name == "a":
             if closing:
                 if not stack or stack[-1] != "a":
                     return False, "Tag <a> មិនបានបិទត្រឹមត្រូវ"
                 stack.pop()
                 continue
-            # opening <a>
             if "href" not in attrs.lower():
                 return False, "Tag <a> ត្រូវមាន href"
             stack.append("a")
             continue
 
-        # Normalize alias tags
+        # Normalize semantic aliases to canonical names
         aliases = {
             "strong": "b",
             "em": "i",
@@ -173,7 +185,7 @@ def validate_telegram_html(text: str) -> tuple[bool, str]:
             stack.append(name)
 
     if stack:
-        # Most common: missing closing tag
-        return False, f"Tag HTML មិនបានបិទ: {', '.join(f'</{t}>' for t in reversed(stack))}"
+        unclosed = ", ".join(f"</{t}>" for t in reversed(stack))
+        return False, f"Tag HTML មិនបានបិទ: {unclosed}"
 
     return True, ""
