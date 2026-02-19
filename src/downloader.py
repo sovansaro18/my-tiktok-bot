@@ -4,6 +4,7 @@ import os
 import re
 import uuid
 import time
+import shutil
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -18,12 +19,6 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_DIR = "downloads"
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
-
-COOKIES_FILE = (
-    os.getenv("YTDLP_COOKIES")
-    or os.getenv("COOKIES_FILE")
-    or "cookies.txt"
-)
 
 IMAGE_EXTS = {"jpg", "jpeg", "png", "webp"}
 
@@ -60,6 +55,7 @@ class Downloader:
 
     EXTRACTOR_ARGS = {
         "youtube": {
+            # Rotate player clients per retry attempt
             "player_client": ["tv", "android_sdkless", "web_safari", "ios", "android"],
             "skip": ["dash", "hls"],
         },
@@ -72,6 +68,51 @@ class Downloader:
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.max_retries = 3
         self._shutdown = False
+        # ✅ FIX: Copy cookies to writable /tmp/ at startup
+        # Render.com mounts /etc/secrets/ as read-only → yt-dlp crashes
+        self._cookies_file = self._prepare_cookies_file()
+
+    def _prepare_cookies_file(self) -> Optional[str]:
+        """
+        Copy cookies from read-only mount (e.g. Render /etc/secrets/)
+        to writable /tmp/ so yt-dlp can read without crashing.
+
+        Returns writable path, or None if no cookies found.
+        """
+        candidates = [
+            os.getenv("YTDLP_COOKIES"),
+            os.getenv("COOKIES_FILE"),
+            "/etc/secrets/cookies.txt",
+            "cookies.txt",
+        ]
+
+        source = None
+        for path in candidates:
+            if path and os.path.exists(path) and os.path.getsize(path) > 0:
+                source = path
+                break
+
+        if not source:
+            logger.warning("⚠️ No cookies.txt found — YouTube may fail bot detection")
+            return None
+
+        # If already in a writable location, use directly
+        writable_prefixes = ("/tmp", "/home", "/app", DOWNLOAD_DIR)
+        if any(source.startswith(p) for p in writable_prefixes):
+            logger.info(f"🍪 Cookies already writable: {source}")
+            return source
+
+        # Copy to /tmp/ to avoid read-only filesystem crash
+        tmp_cookies = "/tmp/yt_cookies.txt"
+        try:
+            shutil.copy2(source, tmp_cookies)
+            os.chmod(tmp_cookies, 0o600)
+            logger.info(f"🍪 Cookies copied: {source} → {tmp_cookies}")
+            return tmp_cookies
+        except Exception as e:
+            logger.error(f"❌ Failed to copy cookies to /tmp/: {e}")
+            # Return original path — yt-dlp may still work read-only
+            return source
 
     def shutdown(self, wait: bool = True) -> None:
         if not self._shutdown:
@@ -89,6 +130,7 @@ class Downloader:
     # ─────────────────────────────────────────────
 
     def _detect_platform(self, url: str) -> str:
+        """Detect platform from URL string."""
         url_lower = url.lower()
         if any(d in url_lower for d in ["youtube.com", "youtu.be"]):
             return "youtube"
@@ -105,6 +147,7 @@ class Downloader:
         return "other"
 
     def _normalize_youtube_url(self, url: str) -> str:
+        """Convert YouTube Shorts URLs to standard watch?v= format."""
         try:
             parsed = urlparse(url)
             host = (parsed.hostname or "").lower()
@@ -123,6 +166,7 @@ class Downloader:
         return url
 
     async def _resolve_redirect(self, url: str) -> str:
+        """Follow URL redirects (e.g., pin.it short links)."""
         timeout = aiohttp.ClientTimeout(total=20)
         headers = {
             "User-Agent": self.USER_AGENT,
@@ -146,6 +190,14 @@ class Downloader:
         url: str = "",
         check_only: bool = False,
     ) -> Dict[str, Any]:
+        """
+        Build yt-dlp options tailored to platform and download type.
+
+        Key fixes:
+        ✅ Cookies copied to writable /tmp/ — no more read-only crash
+        ✅ Audio block clears all video postprocessor_args
+        ✅ retries reduced 10→5 to prevent hang
+        """
         platform = self._detect_platform(url)
         logger.info(f"🔍 Platform: {platform} | Type: {download_type}")
 
@@ -154,7 +206,7 @@ class Downloader:
             "no_warnings": False,
             "noplaylist": True,
             "socket_timeout": 30,
-            "retries": 5,                  # ✅ ลด retries 10→5 ជៀសវាង hang
+            "retries": 5,               # ✅ Reduced from 10 to prevent hang
             "fragment_retries": 5,
             "verbose": True,
             "logger": logger,
@@ -176,7 +228,6 @@ class Downloader:
             "sleep_interval_requests": 1,
             "ignoreerrors": False,
             "no_color": True,
-            # ✅ FIX HANG: Hard limit on total download time per fragment
             "http_chunk_size": 10 * 1024 * 1024,  # 10MB chunks
         }
 
@@ -184,9 +235,12 @@ class Downloader:
             common_opts["outtmpl"] = f"{DOWNLOAD_DIR}/%(id)s.%(ext)s"
             common_opts["max_filesize"] = MAX_FILE_SIZE
 
-        if os.path.exists(COOKIES_FILE):
-            common_opts["cookiefile"] = COOKIES_FILE
-            logger.info(f"🍪 Using cookies: {COOKIES_FILE}")
+        # ✅ FIX: Use writable cookies path (copied from /etc/secrets/)
+        if self._cookies_file and os.path.exists(self._cookies_file):
+            common_opts["cookiefile"] = self._cookies_file
+            logger.info(f"🍪 Using cookies: {self._cookies_file}")
+        else:
+            logger.warning("⚠️ Cookies unavailable — proceeding without authentication")
 
         # ── Platform-specific overrides ──────────────────────────────
 
@@ -198,7 +252,7 @@ class Downloader:
             })
 
         elif platform == "tiktok":
-            # Force H.264 for Telegram compatibility
+            # Force H.264 (AVC) codec — H.265 shows black screen on Telegram
             common_opts["format"] = (
                 "bestvideo[vcodec^=avc1][height<=1080][ext=mp4]"
                 "+bestaudio[ext=m4a]/"
@@ -215,6 +269,7 @@ class Downloader:
                     }
                 ]
                 common_opts["postprocessor_args"] = {
+                    # Force libx264 + AAC for Telegram compatibility
                     "videoconvertor": [
                         "-vcodec", "libx264",
                         "-acodec", "aac",
@@ -248,13 +303,13 @@ class Downloader:
             })
 
         # ── Download type overrides ───────────────────────────────────
-        # ✅ FIX HANG: Audio block must run LAST and clear all video opts
+        # ✅ IMPORTANT: Audio block runs LAST and overrides ALL platform opts
+        # This prevents TikTok video codec args from leaking into audio
 
         if download_type == "audio":
-            # ✅ KEY FIX: Clear ALL platform-specific postprocessors first
-            # then set audio-specific ones. This prevents TikTok video
-            # codec args from leaking into audio extraction.
-            common_opts["format"] = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
+            common_opts["format"] = (
+                "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
+            )
             common_opts["postprocessors"] = (
                 [
                     {
@@ -266,17 +321,16 @@ class Downloader:
                 if not check_only
                 else []
             )
-            # ✅ Clear any leaked video postprocessor_args from TikTok block
+            # ✅ Clear TikTok video postprocessor_args leak
             common_opts["postprocessor_args"] = {}
-            # ✅ Remove merge_output_format — not needed for audio
+            # ✅ Remove video-only options
             common_opts.pop("merge_output_format", None)
-            # ✅ Audio files are small — no need for max_filesize check
-            common_opts.pop("max_filesize", None)
-            # ✅ Prefer ffmpeg for extraction
+            common_opts.pop("max_filesize", None)  # Audio always small
             common_opts["prefer_ffmpeg"] = True
             common_opts["keepvideo"] = False
 
         elif platform == "youtube" and download_type == "video":
+            # YouTube: prefer H.264 mp4 up to 1080p
             common_opts["format"] = (
                 "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
                 "bestvideo[height<=1080]+bestaudio/"
@@ -330,6 +384,7 @@ class Downloader:
 
             except Exception as e:
                 logger.error(f"❌ Size probe error: {e}")
+                # Allow download to proceed — size enforced during download
                 return {"status": "ok", "size": None}
 
     def _probe_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
@@ -356,7 +411,7 @@ class Downloader:
 
                 filename = ydl.prepare_filename(info)
 
-                # Resolve final filename after postprocessing
+                # Resolve final filename after postprocessing (e.g., .mp3)
                 if opts.get("postprocessors"):
                     base, _ = os.path.splitext(filename)
                     try:
@@ -370,7 +425,7 @@ class Downloader:
                         ext = "mp4"
                     filename = f"{base}.{ext}"
 
-                # ✅ FIX: Check multiple extensions (mp3, mp4, m4a, etc.)
+                # ✅ FIX: Check multiple extensions — not just .mp4
                 if not os.path.exists(filename):
                     base, _ = os.path.splitext(filename)
                     found = False
@@ -424,15 +479,24 @@ class Downloader:
                 if "Video unavailable" in error_msg or "Private video" in error_msg:
                     return {"status": "error", "message": "Video unavailable or private"}
                 if "Sign in to confirm" in error_msg:
-                    return {"status": "error", "message": "Age-restricted. Need cookies.txt"}
+                    return {
+                        "status": "error",
+                        "message": "Age-restricted. Need cookies.txt",
+                    }
                 if "HTTP Error 429" in error_msg:
                     return {"status": "error", "message": "Rate limited. Try in 5 minutes"}
                 if "HTTP Error 403" in error_msg:
-                    return {"status": "error", "message": "Access forbidden. May be region-blocked"}
+                    return {
+                        "status": "error",
+                        "message": "Access forbidden. May be region-blocked",
+                    }
                 if "Failed to extract any player response" in error_msg:
                     return {
                         "status": "error",
-                        "message": "YouTube បានប្តូររចនាសម្ព័ន្ធ។ សូមព្យាយាមម្ដងទៀតក្រោយ។",
+                        "message": (
+                            "YouTube បានប្តូររចនាសម្ព័ន្ធ។ "
+                            "សូមព្យាយាមម្ដងទៀតក្រោយ។"
+                        ),
                     }
                 return {
                     "status": "error",
@@ -448,8 +512,10 @@ class Downloader:
     # ─────────────────────────────────────────────
 
     def _is_slideshow_info(self, info: Dict[str, Any]) -> bool:
+        """Return True if yt-dlp info looks like a TikTok photo slideshow."""
         if not isinstance(info, dict):
             return False
+
         if info.get("_type") == "playlist" and isinstance(info.get("entries"), list):
             for entry in info.get("entries") or []:
                 if not isinstance(entry, dict):
@@ -462,12 +528,14 @@ class Downloader:
                     url.lower().endswith("." + x) for x in IMAGE_EXTS
                 ):
                     return True
+
         ext = (info.get("ext") or "").lower()
         return ext in IMAGE_EXTS
 
     def _download_tiktok_slideshow_sync(
         self, url: str, base_opts: Dict[str, Any]
     ) -> Dict[str, Any]:
+        """Download a TikTok photo/slideshow post as individual image files."""
         folder = os.path.join(DOWNLOAD_DIR, f"tiktok_slideshow_{uuid.uuid4().hex}")
         os.makedirs(folder, exist_ok=True)
 
@@ -515,6 +583,7 @@ class Downloader:
     async def _download_direct_mp4(
         self, mp4_url: str, title: str = "Pinterest Video"
     ) -> Dict[str, Any]:
+        """Download a known direct MP4 URL via aiohttp (Pinterest fallback)."""
         timeout = aiohttp.ClientTimeout(total=120)
         headers = {"User-Agent": self.USER_AGENT}
         out_path = os.path.join(DOWNLOAD_DIR, f"{uuid.uuid4().hex}.mp4")
@@ -528,7 +597,10 @@ class Downloader:
                         limit_mb = MAX_FILE_SIZE / 1024 / 1024
                         return {
                             "status": "error",
-                            "message": f"File too large: {size_mb:.1f}MB (limit: {limit_mb:.0f}MB)",
+                            "message": (
+                                f"File too large: {size_mb:.1f}MB "
+                                f"(limit: {limit_mb:.0f}MB)"
+                            ),
                             "size": int(size),
                         }
             except Exception:
@@ -553,7 +625,10 @@ class Downloader:
                                 pass
                             return {
                                 "status": "error",
-                                "message": f"File too large (limit: {MAX_FILE_SIZE / 1024 / 1024:.0f}MB)",
+                                "message": (
+                                    f"File too large "
+                                    f"(limit: {MAX_FILE_SIZE / 1024 / 1024:.0f}MB)"
+                                ),
                             }
                         f.write(chunk)
 
@@ -568,6 +643,12 @@ class Downloader:
     async def _download_pinterest(
         self, url: str, download_type: str = "video"
     ) -> Dict[str, Any]:
+        """
+        Pinterest-specific fallback:
+        1. Resolve pin.it short links
+        2. Fetch HTML page
+        3. Extract direct mp4 URL from pinimg.com CDN
+        """
         if download_type != "video":
             return {"status": "error", "message": "Pinterest supports video only"}
 
@@ -633,7 +714,7 @@ class Downloader:
         """
         Download via yt-dlp with:
         - Slideshow detection for TikTok
-        - Size check SKIPPED for audio (always small)
+        - Size check SKIPPED for audio (always small, and can hang)
         - Size check SKIPPED for TikTok (Cobalt handles it)
         - Retry loop with user-agent + client rotation
         """
@@ -663,11 +744,10 @@ class Downloader:
             except Exception as e:
                 logger.warning(f"TikTok slideshow probe failed, continuing: {e}")
 
-        # ✅ FIX HANG: Skip size check for AUDIO and TIKTOK entirely
+        # ✅ FIX HANG: Skip size check for audio and TikTok
         # - Audio files are almost always < 10MB → no risk
-        # - TikTok: Cobalt already handled size upstream
-        # - Size check itself can hang on YouTube player extraction
-        skip_size_check = type == "audio" or platform == "tiktok"
+        # - Size check itself can hang on YouTube bot-detection loop
+        skip_size_check = (type == "audio") or (platform == "tiktok")
 
         if not skip_size_check:
             logger.info("📏 Checking file size before download...")
@@ -682,9 +762,11 @@ class Downloader:
         for attempt in range(1, self.max_retries + 1):
             opts = self._get_opts(type, url)
 
+            # Rotate user-agent per attempt
             ua = self.USER_AGENTS[(attempt - 1) % len(self.USER_AGENTS)]
             opts.setdefault("http_headers", {})["User-Agent"] = ua
 
+            # Rotate YouTube player clients per attempt
             if platform == "youtube":
                 clients = [
                     ["tv", "android_sdkless", "web_safari"],
@@ -709,6 +791,7 @@ class Downloader:
                 if result["status"] == "success":
                     return result
 
+                # Do not retry permanent errors
                 non_retryable = [
                     "File too large",
                     "unavailable",
@@ -741,6 +824,12 @@ class Downloader:
     async def download(self, url: str, type: str = "video") -> Dict[str, Any]:
         """
         Route download request to appropriate handler based on platform.
+
+        Routes:
+          TikTok   → Cobalt API v7 → yt-dlp (H.264 forced)
+          Facebook → Facebook Multi-API → yt-dlp
+          Pinterest→ Direct MP4 fallback
+          Others   → yt-dlp
         """
         platform = self._detect_platform(url)
 
@@ -792,7 +881,7 @@ class Downloader:
                 logger.warning(f"⚠️ Pinterest direct failed: {result.get('message')}")
             return result
 
-        # ── All other platforms (YouTube, Instagram, etc.) ─────────
+        # ── All other platforms ────────────────────────────────────
         else:
             logger.info(f"📹 {platform} → yt-dlp | type={type}")
             return await self.download_with_ytdlp(url, type)
