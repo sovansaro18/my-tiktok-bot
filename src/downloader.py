@@ -286,6 +286,9 @@ class Downloader:
                     if not check_only
                     else []
                 ),
+                # ✅ FIX Bug 1: Clear TikTok video postprocessor_args
+                # to prevent FFmpeg from applying video codec args to audio extraction
+                "postprocessor_args": {},
             })
 
         elif platform == "youtube":
@@ -357,87 +360,111 @@ class Downloader:
     # ─────────────────────────────────────────────
     # Core yt-dlp Download
     # ─────────────────────────────────────────────
+def _download_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
+    """Blocking yt-dlp download — must be run inside executor."""
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        try:
+            logger.info(f"⬇️ yt-dlp downloading: {url}")
+            info = ydl.extract_info(url, download=True)
 
-    def _download_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
-        """Blocking yt-dlp download — must be run inside executor."""
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            try:
-                logger.info(f"⬇️ yt-dlp downloading: {url}")
-                info = ydl.extract_info(url, download=True)
+            if not info:
+                return {"status": "error", "message": "Cannot extract video info"}
 
-                if not info:
-                    return {"status": "error", "message": "Cannot extract video info"}
+            if "entries" in info:
+                info = info["entries"][0]
 
-                if "entries" in info:
-                    info = info["entries"][0]
+            filename = ydl.prepare_filename(info)
 
-                filename = ydl.prepare_filename(info)
+            # Resolve final filename after postprocessing (e.g., .mp3)
+            if opts.get("postprocessors"):
+                base, _ = os.path.splitext(filename)
+                try:
+                    pp = (opts.get("postprocessors") or [])[0] or {}
+                    ext = (
+                        pp.get("preferredcodec")
+                        or pp.get("preferedformat")
+                        or "mp4"
+                    ).strip().lower()
+                except Exception:
+                    ext = "mp4"
+                filename = f"{base}.{ext}"
 
-                # Resolve final filename after postprocessing (e.g., .mp3)
-                if opts.get("postprocessors"):
-                    base, _ = os.path.splitext(filename)
+            # ✅ FIX Bug 2: Check multiple extensions, not just .mp4
+            if not os.path.exists(filename):
+                base, _ = os.path.splitext(filename)
+                found = False
+
+                for candidate_ext in ["mp3", "mp4", "m4a", "opus", "webm"]:
+                    candidate = f"{base}.{candidate_ext}"
+                    if os.path.exists(candidate):
+                        filename = candidate
+                        found = True
+                        logger.info(f"✅ Resolved filename: {candidate}")
+                        break
+
+                # Last resort: scan downloads/ for newest file < 60s old
+                if not found:
                     try:
-                        pp = (opts.get("postprocessors") or [])[0] or {}
-                        ext = (
-                            pp.get("preferredcodec")
-                            or pp.get("preferedformat")
-                            or "mp4"
-                        ).strip().lower()
-                    except Exception:
-                        ext = "mp4"
-                    filename = f"{base}.{ext}"
+                        all_files = [
+                            os.path.join(DOWNLOAD_DIR, f)
+                            for f in os.listdir(DOWNLOAD_DIR)
+                            if os.path.isfile(os.path.join(DOWNLOAD_DIR, f))
+                        ]
+                        if all_files:
+                            import time as _time
+                            latest = max(all_files, key=os.path.getmtime)
+                            age = _time.time() - os.path.getmtime(latest)
+                            if age < 60:
+                                logger.warning(f"⚠️ Fallback file: {latest}")
+                                filename = latest
+                                found = True
+                    except Exception as scan_err:
+                        logger.error(f"Folder scan error: {scan_err}")
 
-                if not os.path.exists(filename):
-                    # FFmpegVideoConvertor outputs .mp4 regardless of source ext
-                    base, _ = os.path.splitext(filename)
-                    mp4_candidate = f"{base}.mp4"
-                    if os.path.exists(mp4_candidate):
-                        filename = mp4_candidate
-                    else:
-                        return {
-                            "status": "error",
-                            "message": "File not found after download",
-                        }
-
-                return {
-                    "status": "success",
-                    "file_path": filename,
-                    "title": info.get("title", "Unknown"),
-                    "duration": info.get("duration", 0),
-                    "uploader": info.get("uploader", "Unknown"),
-                }
-
-            except yt_dlp.utils.DownloadError as e:
-                error_msg = str(e)
-                logger.error(f"❌ DownloadError: {error_msg}")
-
-                # Map known error strings to friendly messages
-                if "File is larger than" in error_msg or "too large" in error_msg.lower():
-                    return {"status": "error", "message": "File too large (>49MB)"}
-                if "Video unavailable" in error_msg or "Private video" in error_msg:
-                    return {"status": "error", "message": "Video unavailable or private"}
-                if "Sign in to confirm" in error_msg:
-                    return {"status": "error", "message": "Age-restricted. Need cookies.txt"}
-                if "HTTP Error 429" in error_msg:
-                    return {"status": "error", "message": "Rate limited. Try in 5 minutes"}
-                if "HTTP Error 403" in error_msg:
-                    return {"status": "error", "message": "Access forbidden. May be region-blocked"}
-                if "Failed to extract any player response" in error_msg:
+                if not found:
                     return {
                         "status": "error",
-                        "message": (
-                            "YouTube បានប្តូររចនាសម្ព័ន្ធ។ "
-                            "សូមព្យាយាមម្ដងទៀតក្រោយ។"
-                        ),
+                        "message": "File not found after download",
                     }
+
+            return {
+                "status": "success",
+                "file_path": filename,
+                "title": info.get("title", "Unknown"),
+                "duration": info.get("duration", 0),
+                "uploader": info.get("uploader", "Unknown"),
+            }
+
+        except yt_dlp.utils.DownloadError as e:
+            error_msg = str(e)
+            logger.error(f"❌ DownloadError: {error_msg}")
+
+            if "File is larger than" in error_msg or "too large" in error_msg.lower():
+                return {"status": "error", "message": "File too large (>49MB)"}
+            if "Video unavailable" in error_msg or "Private video" in error_msg:
+                return {"status": "error", "message": "Video unavailable or private"}
+            if "Sign in to confirm" in error_msg:
+                return {"status": "error", "message": "Age-restricted. Need cookies.txt"}
+            if "HTTP Error 429" in error_msg:
+                return {"status": "error", "message": "Rate limited. Try in 5 minutes"}
+            if "HTTP Error 403" in error_msg:
+                return {"status": "error", "message": "Access forbidden. May be region-blocked"}
+            if "Failed to extract any player response" in error_msg:
                 return {
                     "status": "error",
-                    "message": f"Download failed: {error_msg[:200]}",
+                    "message": (
+                        "YouTube បានប្តូររចនាសម្ព័ន្ធ។ "
+                        "សូមព្យាយាមម្ដងទៀតក្រោយ។"
+                    ),
                 }
+            return {
+                "status": "error",
+                "message": f"Download failed: {error_msg[:200]}",
+            }
 
-            except Exception as e:
-                logger.error(f"❌ Unexpected error: {e}", exc_info=True)
-                return {"status": "error", "message": f"Error: {str(e)[:200]}"}
+        except Exception as e:
+            logger.error(f"❌ Unexpected error: {e}", exc_info=True)
+            return {"status": "error", "message": f"Error: {str(e)[:200]}"}
 
     # ─────────────────────────────────────────────
     # TikTok Slideshow / Photo Post Handling
