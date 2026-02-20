@@ -17,6 +17,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import ChatMemberUpdated
 
 from src.config import (
     ADMIN_ID,
@@ -1017,4 +1018,48 @@ async def handle_receipt(message: Message):
         await message.answer(
             "⚠️ មានបញ្ហា។ សូមទាក់ទង Admin ដោយផ្ទាល់។",
             parse_mode="HTML",
+        )
+
+        # ─────────────────────────────────────────────
+# User Block / Leave Detection
+# ─────────────────────────────────────────────
+
+
+@router.my_chat_member()
+async def handle_bot_blocked(event: ChatMemberUpdated):
+    """
+    Fires when user blocks, unblocks, or kicks the bot.
+    Telegram sends my_chat_member update automatically.
+    """
+    old_status = event.old_chat_member.status
+    new_status = event.new_chat_member.status
+    user = event.from_user
+
+    user_id = user.id
+    full_name = escape(user.full_name or "")
+    username = f"@{escape(user.username)}" if user.username else "(no username)"
+
+    # ── User blocked or kicked the bot ──────────────────────────
+    if new_status in ("kicked", "left") and old_status == "member":
+        logger.info(f"🚫 User blocked bot: {user_id}")
+
+        await send_log(
+            f"🚫 <b>User បានចាកចេញ / Block Bot</b>\n\n"
+            f"👤 {full_name}\n"
+            f"🆔 <code>{user_id}</code>\n"
+            f"🔗 {username}",
+            bot=event.bot,
+        )
+        return
+
+    # ── User unblocked the bot ───────────────────────────────────
+    if new_status == "member" and old_status in ("kicked", "left"):
+        logger.info(f"✅ User unblocked bot: {user_id}")
+
+        await send_log(
+            f"✅ <b>User បានត្រឡប់មកវិញ / Unblock Bot</b>\n\n"
+            f"👤 {full_name}\n"
+            f"🆔 <code>{user_id}</code>\n"
+            f"🔗 {username}",
+            bot=event.bot,
         )
