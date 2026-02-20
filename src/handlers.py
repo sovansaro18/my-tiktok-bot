@@ -623,14 +623,11 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         if user_data.get("status") != "premium":
             updated = await db.record_download(user_id)
             notification = get_usage_notification(updated)
-        else:
-            notification = get_usage_notification(user_data)
-
-        await callback.message.answer(
-            notification["text"],
-            parse_mode="HTML",
-            reply_markup=notification["keyboard"],
-        )
+            await callback.message.answer(
+                notification["text"],
+                parse_mode="HTML",
+                reply_markup=notification["keyboard"],
+            )
 
         # Cleanup image files + folder
         for p in paths:
@@ -701,14 +698,12 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         if user_data.get("status") != "premium":
             updated = await db.record_download(user_id)
             notification = get_usage_notification(updated)
-        else:
-            notification = get_usage_notification(user_data)
-
-        await callback.message.answer(
-            notification["text"],
-            parse_mode="HTML",
-            reply_markup=notification["keyboard"],
-        )
+            await callback.message.answer(
+                notification["text"],
+                parse_mode="HTML",
+                reply_markup=notification["keyboard"],
+            )
+        # ✅ Premium users: no usage notification shown
 
     except TelegramBadRequest as e:
         err_str = str(e).lower()
