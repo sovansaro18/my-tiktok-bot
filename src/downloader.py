@@ -48,6 +48,8 @@ class Downloader:
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.max_retries = 3
         self._shutdown = False
+        # ✅ Copy cookies to writable /tmp/ at startup
+        # Render.com mounts /etc/secrets/ as read-only → yt-dlp crashes
         self._cookies_file = self._prepare_cookies_file()
 
     def _prepare_cookies_file(self) -> Optional[str]:
@@ -117,6 +119,7 @@ class Downloader:
         return "other"
 
     def _normalize_youtube_url(self, url: str) -> str:
+        """Convert YouTube Shorts URLs to standard watch?v= format."""
         try:
             parsed = urlparse(url)
             host = (parsed.hostname or "").lower()
@@ -135,6 +138,7 @@ class Downloader:
         return url
 
     async def _resolve_redirect(self, url: str) -> str:
+        """Follow URL redirects (e.g., pin.it short links)."""
         timeout = aiohttp.ClientTimeout(total=20)
         headers = {"User-Agent": self.USER_AGENT}
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
@@ -154,6 +158,13 @@ class Downloader:
         url: str = "",
         check_only: bool = False,
     ) -> Dict[str, Any]:
+        """
+        Build yt-dlp options tailored to platform and download type.
+
+        ✅ FIX BLACK SCREEN: postprocessor_args key = lowercase "ffmpegvideoconvertor"
+        ✅ FIX AUDIO: Audio block runs LAST, clears all video postprocessor_args
+        ✅ FIX COOKIES: Use writable /tmp/yt_cookies.txt copy
+        """
         platform = self._detect_platform(url)
         logger.info(f"🔍 Platform: {platform} | Type: {download_type}")
 
@@ -196,11 +207,14 @@ class Downloader:
             common_opts["outtmpl"] = f"{DOWNLOAD_DIR}/%(id)s.%(ext)s"
             common_opts["max_filesize"] = MAX_FILE_SIZE
 
+        # ✅ Use writable cookies path (copied from /etc/secrets/)
         if self._cookies_file and os.path.exists(self._cookies_file):
             common_opts["cookiefile"] = self._cookies_file
             logger.info(f"🍪 Using cookies: {self._cookies_file}")
         else:
             logger.warning("⚠️ No cookies — YouTube may block")
+
+        # ── Platform-specific overrides ──────────────────────────────
 
         if platform == "youtube":
             common_opts.update({
@@ -210,8 +224,9 @@ class Downloader:
             })
 
         elif platform == "tiktok":
-            # ✅ download_type "photo" is handled separately — skip here
+            # ✅ photo type is handled by TikWM API — skip yt-dlp opts
             if download_type == "video":
+                # Force H.264 (AVC) codec — H.265 shows black screen on Telegram
                 common_opts["format"] = (
                     "bestvideo[vcodec^=avc1][height<=1080][ext=mp4]"
                     "+bestaudio[ext=m4a]/"
@@ -227,8 +242,8 @@ class Downloader:
                             "preferedformat": "mp4",
                         }
                     ]
+                    # ✅ KEY FIX: lowercase keys — yt-dlp internal matching
                     common_opts["postprocessor_args"] = {
-                        # ✅ Lowercase key — yt-dlp internal matching
                         "ffmpegvideoconvertor": [
                             "-vcodec", "libx264",
                             "-acodec", "aac",
@@ -268,6 +283,7 @@ class Downloader:
                 "format": "best",
             })
 
+        # ── YouTube video format ──────────────────────────────────────
         if platform == "youtube" and download_type == "video":
             common_opts["format"] = (
                 "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
@@ -279,6 +295,7 @@ class Downloader:
                 common_opts["merge_output_format"] = "mp4"
 
         # ── AUDIO block — runs LAST, overrides ALL platform video opts ──
+        # ✅ Completely replaces postprocessors to prevent TikTok args leak
         if download_type == "audio":
             common_opts["format"] = (
                 "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
@@ -294,7 +311,7 @@ class Downloader:
                 if not check_only
                 else []
             )
-            # ✅ Clear TikTok video args leak
+            # ✅ Clear ALL video postprocessor_args (TikTok libx264 leak)
             common_opts["postprocessor_args"] = {}
             common_opts.pop("merge_output_format", None)
             common_opts.pop("max_filesize", None)
@@ -308,6 +325,7 @@ class Downloader:
     # ─────────────────────────────────────────────
 
     def _check_size_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Probe video metadata WITHOUT downloading to validate file size."""
         with yt_dlp.YoutubeDL(opts) as ydl:
             try:
                 info = ydl.extract_info(url, download=False)
@@ -332,6 +350,7 @@ class Downloader:
                 return {"status": "ok", "size": None}
 
     def _probe_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Lightweight metadata probe (no download)."""
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
 
@@ -340,6 +359,7 @@ class Downloader:
     # ─────────────────────────────────────────────
 
     def _download_sync(self, url: str, opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Blocking yt-dlp download — must be run inside executor."""
         with yt_dlp.YoutubeDL(opts) as ydl:
             try:
                 logger.info(f"⬇️ yt-dlp downloading: {url}")
@@ -352,6 +372,7 @@ class Downloader:
 
                 filename = ydl.prepare_filename(info)
 
+                # Resolve final filename after postprocessing
                 if opts.get("postprocessors"):
                     base, _ = os.path.splitext(filename)
                     try:
@@ -365,6 +386,7 @@ class Downloader:
                         ext = "mp4"
                     filename = f"{base}.{ext}"
 
+                # ✅ Check multiple extensions — not just .mp4
                 if not os.path.exists(filename):
                     base, _ = os.path.splitext(filename)
                     found = False
@@ -376,6 +398,7 @@ class Downloader:
                             logger.info(f"✅ Resolved: {candidate}")
                             break
 
+                    # Last resort: newest file in downloads/ within 60s
                     if not found:
                         try:
                             all_files = [
@@ -426,10 +449,11 @@ class Downloader:
                 return {"status": "error", "message": f"Error: {str(e)[:200]}"}
 
     # ─────────────────────────────────────────────
-    # TikTok Slideshow / Photo
+    # TikTok Slideshow (yt-dlp fallback)
     # ─────────────────────────────────────────────
 
     def _is_slideshow_info(self, info: Dict[str, Any]) -> bool:
+        """Return True if yt-dlp info looks like a TikTok photo slideshow."""
         if not isinstance(info, dict):
             return False
         if info.get("_type") == "playlist" and isinstance(info.get("entries"), list):
@@ -440,7 +464,9 @@ class Downloader:
                 if ext in IMAGE_EXTS:
                     return True
                 url = entry.get("url")
-                if isinstance(url, str) and any(url.lower().endswith("." + x) for x in IMAGE_EXTS):
+                if isinstance(url, str) and any(
+                    url.lower().endswith("." + x) for x in IMAGE_EXTS
+                ):
                     return True
         ext = (info.get("ext") or "").lower()
         return ext in IMAGE_EXTS
@@ -449,9 +475,8 @@ class Downloader:
         self, url: str, base_opts: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        ✅ Download TikTok photo/slideshow directly.
-        Called both from auto-detection (video probe) and
-        explicit Photo button (type="photo").
+        yt-dlp fallback for TikTok slideshow.
+        Used when TikWM API fails.
         """
         folder = os.path.join(DOWNLOAD_DIR, f"tiktok_slideshow_{uuid.uuid4().hex}")
         os.makedirs(folder, exist_ok=True)
@@ -482,7 +507,7 @@ class Downloader:
                 "status": "error",
                 "message": (
                     "រកមិនឃើញរូបភាពទេ។ "
-                    "Link នេះអាចជាវីដេអូ — សូមសាកល្បង Video ជំនួស។"
+                    "Link នេះអាចជាវីដេអូ — សូមសាកល្បង 🎬 Video ជំនួស។"
                 ),
             }
 
@@ -496,10 +521,136 @@ class Downloader:
         }
 
     # ─────────────────────────────────────────────
+    # TikWM Photo API (Primary for Photo button)
+    # ─────────────────────────────────────────────
+
+    async def _try_tikwm_photo(self, url: str) -> Dict[str, Any]:
+        """
+        ✅ TikWM API for TikTok photo/slideshow posts.
+        Handles /photo/ URLs that yt-dlp hangs on.
+        Returns slideshow result with downloaded image files.
+
+        Returns special message "not_photo_post" if URL is a video,
+        so caller can redirect to video handler.
+        """
+        try:
+            logger.info("🖼️ TikWM photo API...")
+            headers = {
+                "User-Agent": self.USER_AGENT,
+                "Accept": "application/json",
+            }
+            api_url = f"https://www.tikwm.com/api/?url={url}&hd=1"
+            timeout = aiohttp.ClientTimeout(total=30)
+
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(api_url, headers=headers) as response:
+                    if response.status != 200:
+                        return {
+                            "status": "error",
+                            "message": f"TikWM returned {response.status}",
+                        }
+
+                    data = await response.json()
+
+                    if data.get("code") != 0:
+                        logger.warning(f"TikWM error: {data.get('msg')}")
+                        return {"status": "error", "message": "TikWM API error"}
+
+                    video_data = data.get("data", {})
+                    title = video_data.get("title", "TikTok Photo")
+
+                    # ── Check if it's actually a photo/slideshow post ──
+                    images = video_data.get("images") or []
+
+                    if not images:
+                        # Not a photo post — video URL was sent
+                        logger.warning("TikWM: no images field — this is a video post")
+                        return {
+                            "status": "error",
+                            "message": "not_photo_post",
+                        }
+
+                    logger.info(f"🖼️ TikWM found {len(images)} images")
+
+                    # ── Download each image ──
+                    folder = os.path.join(
+                        DOWNLOAD_DIR, f"tiktok_photo_{uuid.uuid4().hex}"
+                    )
+                    os.makedirs(folder, exist_ok=True)
+
+                    downloaded_files = []
+                    dl_timeout = aiohttp.ClientTimeout(total=60)
+
+                    async with aiohttp.ClientSession(
+                        timeout=dl_timeout, headers=headers
+                    ) as dl_session:
+                        for idx, img_url in enumerate(images):
+                            try:
+                                async with dl_session.get(
+                                    img_url, allow_redirects=True
+                                ) as img_resp:
+                                    if img_resp.status != 200:
+                                        logger.warning(
+                                            f"Image {idx+1} failed: HTTP {img_resp.status}"
+                                        )
+                                        continue
+
+                                    # Detect extension from Content-Type
+                                    content_type = img_resp.headers.get(
+                                        "Content-Type", "image/jpeg"
+                                    )
+                                    ext = "jpg"
+                                    if "png" in content_type:
+                                        ext = "png"
+                                    elif "webp" in content_type:
+                                        ext = "webp"
+
+                                    img_path = os.path.join(
+                                        folder, f"photo_{idx+1:02d}.{ext}"
+                                    )
+                                    content = await img_resp.read()
+                                    with open(img_path, "wb") as f:
+                                        f.write(content)
+
+                                    downloaded_files.append(img_path)
+                                    logger.info(
+                                        f"✅ Image {idx+1}/{len(images)}: {img_path}"
+                                    )
+
+                            except Exception as img_err:
+                                logger.error(f"Image {idx+1} error: {img_err}")
+                                continue
+
+                    if not downloaded_files:
+                        return {
+                            "status": "error",
+                            "message": "Failed to download any images from TikWM",
+                        }
+
+                    return {
+                        "status": "success",
+                        "media_kind": "slideshow",
+                        "file_paths": downloaded_files,
+                        "title": title,
+                        "duration": 0,
+                        "uploader": "TikTok",
+                    }
+
+        except asyncio.TimeoutError:
+            logger.error("TikWM photo API timeout")
+            return {"status": "error", "message": "TikWM timeout"}
+        except Exception as e:
+            logger.error(f"TikWM photo error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    # ─────────────────────────────────────────────
     # Pinterest
     # ─────────────────────────────────────────────
 
-    async def _download_direct_mp4(self, mp4_url: str, title: str = "Pinterest Video") -> Dict[str, Any]:
+    async def _download_direct_mp4(
+        self, mp4_url: str, title: str = "Pinterest Video"
+    ) -> Dict[str, Any]:
+        """Download a known direct MP4 URL via aiohttp."""
         timeout = aiohttp.ClientTimeout(total=120)
         headers = {"User-Agent": self.USER_AGENT}
         out_path = os.path.join(DOWNLOAD_DIR, f"{uuid.uuid4().hex}.mp4")
@@ -538,48 +689,70 @@ class Downloader:
             "uploader": "Pinterest",
         }
 
-    async def _download_pinterest(self, url: str, download_type: str = "video") -> Dict[str, Any]:
+    async def _download_pinterest(
+        self, url: str, download_type: str = "video"
+    ) -> Dict[str, Any]:
+        """Pinterest-specific handler: resolve → fetch HTML → extract mp4."""
         if download_type != "video":
             return {"status": "error", "message": "Pinterest supports video only"}
+
         final_url = await self._resolve_redirect(url)
         m = re.search(r"/pin/(\d+)", final_url)
         if m:
             final_url = f"https://www.pinterest.com/pin/{m.group(1)}/"
+
         timeout = aiohttp.ClientTimeout(total=25)
-        headers = {"User-Agent": self.USER_AGENT, "Accept-Language": "en-US,en;q=0.9"}
+        headers = {
+            "User-Agent": self.USER_AGENT,
+            "Accept-Language": "en-US,en;q=0.9",
+        }
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             try:
                 async with session.get(final_url, allow_redirects=True) as resp:
                     html = await resp.text(errors="ignore")
             except Exception as e:
                 return {"status": "error", "message": f"Pinterest fetch failed: {e}"}
+
         title_m = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
         title = title_m.group(1).strip() if title_m else "Pinterest Video"
+
         mp4_candidates: List[str] = []
         mp4_candidates += re.findall(r"https://v\.pinimg\.com[^\"\\\s]+\.mp4", html)
         mp4_candidates += re.findall(r"https://video\.pinimg\.com[^\"\\\s]+\.mp4", html)
         mp4_candidates += re.findall(r"https://i\.pinimg\.com[^\"\\\s]+\.mp4", html)
+
         if not mp4_candidates:
-            m3u8 = re.findall(r"https://(?:v|video|i)\.pinimg\.com[^\"\s]+\.m3u8", html)
+            m3u8 = re.findall(
+                r"https://(?:v|video|i)\.pinimg\.com[^\"\s]+\.m3u8", html
+            )
             if m3u8:
                 return await self.download_with_ytdlp(m3u8[0], download_type)
             return {"status": "error", "message": "Pinterest is blocking. Try again later."}
+
         return await self._download_direct_mp4(mp4_candidates[0], title=title)
 
     # ─────────────────────────────────────────────
-    # Main Orchestrator
+    # Main yt-dlp Download Orchestrator
     # ─────────────────────────────────────────────
 
-    async def download_with_ytdlp(self, url: str, type: str = "video") -> Dict[str, Any]:
+    async def download_with_ytdlp(
+        self, url: str, type: str = "video"
+    ) -> Dict[str, Any]:
+        """
+        Download via yt-dlp with:
+        - Slideshow auto-detection for TikTok video type
+        - Size check skipped for audio and TikTok
+        - Retry loop with user-agent + YouTube client rotation
+        """
         loop = asyncio.get_running_loop()
         platform = self._detect_platform(url)
 
         if platform == "youtube":
             url = self._normalize_youtube_url(url)
 
-        # ✅ TikTok photo: skip probe, download slideshow directly
+        # ✅ TikTok photo type: skip probe, download slideshow directly
         if platform == "tiktok" and type == "photo":
-            logger.info("🖼️ TikTok Photo button → download slideshow directly")
+            logger.info("🖼️ TikTok Photo (yt-dlp fallback) → slideshow")
             base_opts = self._get_opts("video", url)
             return await loop.run_in_executor(
                 self.executor,
@@ -588,21 +761,27 @@ class Downloader:
                 base_opts,
             )
 
-        # Auto-detect TikTok slideshow for video type
+        # Auto-detect TikTok slideshow when user pressed Video button
         if platform == "tiktok" and type == "video":
             try:
                 probe_opts = self._get_opts(type, url, check_only=True)
                 probe_opts["noplaylist"] = False
-                info = await loop.run_in_executor(self.executor, self._probe_sync, url, probe_opts)
+                info = await loop.run_in_executor(
+                    self.executor, self._probe_sync, url, probe_opts
+                )
                 if isinstance(info, dict) and self._is_slideshow_info(info):
                     logger.info("🖼️ TikTok slideshow auto-detected")
                     base_opts = self._get_opts(type, url)
                     return await loop.run_in_executor(
-                        self.executor, self._download_tiktok_slideshow_sync, url, base_opts
+                        self.executor,
+                        self._download_tiktok_slideshow_sync,
+                        url,
+                        base_opts,
                     )
             except Exception as e:
-                logger.warning(f"Slideshow probe failed: {e}")
+                logger.warning(f"Slideshow probe failed, continuing: {e}")
 
+        # ✅ Skip size check for audio (small) and TikTok (Cobalt handles it)
         skip_size_check = (type == "audio") or (platform == "tiktok")
         if not skip_size_check:
             check_opts = self._get_opts(type, url, check_only=True)
@@ -612,11 +791,15 @@ class Downloader:
             if size_check["status"] == "error":
                 return size_check
 
+        # ── Retry loop ──────────────────────────────────────────────
         for attempt in range(1, self.max_retries + 1):
             opts = self._get_opts(type, url)
+
+            # Rotate user-agent per attempt
             ua = self.USER_AGENTS[(attempt - 1) % len(self.USER_AGENTS)]
             opts.setdefault("http_headers", {})["User-Agent"] = ua
 
+            # Rotate YouTube player clients per attempt
             if platform == "youtube":
                 clients = [
                     ["tv", "android_sdkless", "web_safari"],
@@ -630,14 +813,25 @@ class Downloader:
                 opts["extractor_args"] = ea
 
             try:
-                logger.info(f"⬇️ attempt {attempt}/{self.max_retries} | {platform} | {type}")
-                result = await loop.run_in_executor(self.executor, self._download_sync, url, opts)
+                logger.info(
+                    f"⬇️ attempt {attempt}/{self.max_retries} | {platform} | {type}"
+                )
+                result = await loop.run_in_executor(
+                    self.executor, self._download_sync, url, opts
+                )
                 if result["status"] == "success":
                     return result
-                non_retryable = ["File too large", "unavailable", "private", "Age-restricted", "region-blocked"]
+
+                # Do not retry permanent errors
+                non_retryable = [
+                    "File too large", "unavailable", "private",
+                    "Age-restricted", "region-blocked",
+                ]
                 if any(e in result["message"] for e in non_retryable):
                     return result
+
                 logger.warning(f"⚠️ Attempt {attempt} failed: {result['message']}")
+
             except Exception as e:
                 logger.error(f"❌ Attempt {attempt} exception: {e}")
                 if attempt == self.max_retries:
@@ -646,26 +840,66 @@ class Downloader:
             if attempt < self.max_retries:
                 await asyncio.sleep(min(2 ** attempt, 8))
 
-        return {"status": "error", "message": f"Failed after {self.max_retries} attempts"}
+        return {
+            "status": "error",
+            "message": f"Failed after {self.max_retries} attempts",
+        }
+
+    # ─────────────────────────────────────────────
+    # Public Entry Point
+    # ─────────────────────────────────────────────
 
     async def download(self, url: str, type: str = "video") -> Dict[str, Any]:
+        """
+        Route download request to appropriate handler based on platform.
+
+        TikTok Photo  → TikWM API → yt-dlp slideshow fallback
+        TikTok Audio  → yt-dlp
+        TikTok Video  → Cobalt API v7 → yt-dlp (H.264 forced)
+        Facebook      → Multi-API → yt-dlp
+        Pinterest     → Direct MP4
+        Others        → yt-dlp
+        """
         platform = self._detect_platform(url)
 
+        # ── TikTok ─────────────────────────────────────────────────
         if platform == "tiktok":
-            # ✅ Photo button: direct slideshow download (no Cobalt)
+
+            # ✅ Photo button → TikWM API (fast, no hang on /photo/ URLs)
             if type == "photo":
-                logger.info("🖼️ TikTok photo → direct slideshow download")
+                logger.info("🖼️ TikTok Photo → TikWM API")
+                result = await self._try_tikwm_photo(url)
+
+                if result.get("status") == "success":
+                    logger.info("✅ TikTok photo via TikWM API")
+                    return result
+
+                # Video URL was sent but Photo button pressed
+                if result.get("message") == "not_photo_post":
+                    return {
+                        "status": "error",
+                        "message": (
+                            "Link នេះជាវីដេអូ មិនមែនរូបភាពទេ។\n\n"
+                            "សូមប្រើប៊ូតុង 🎬 <b>Video</b> ជំនួស។"
+                        ),
+                    }
+
+                # TikWM failed — fallback to yt-dlp
+                logger.warning("⚠️ TikWM failed → yt-dlp slideshow fallback")
                 return await self.download_with_ytdlp(url, type)
 
+            # Audio
             if type == "audio":
                 logger.info("🎵 TikTok audio → yt-dlp")
                 return await self.download_with_ytdlp(url, type)
 
+            # Video → Cobalt first, then yt-dlp
             logger.info("🎬 TikTok video → Cobalt API v7")
             try:
                 from src.cobalt_api import cobalt_downloader
                 result = await cobalt_downloader.download(url, type)
                 if result.get("status") == "success":
+                    logger.info("✅ TikTok via Cobalt API v7")
                     return result
                 logger.warning("⚠️ Cobalt failed → yt-dlp (H.264 forced)")
                 return await self.download_with_ytdlp(url, type)
@@ -673,6 +907,7 @@ class Downloader:
                 logger.error(f"❌ Cobalt error: {e}")
                 return await self.download_with_ytdlp(url, type)
 
+        # ── Facebook ───────────────────────────────────────────────
         elif platform == "facebook":
             logger.info("📱 Facebook → Multi-API")
             try:
@@ -686,14 +921,16 @@ class Downloader:
                 logger.error(f"❌ Facebook error: {e}")
                 return await self.download_with_ytdlp(url, type)
 
+        # ── Pinterest ──────────────────────────────────────────────
         elif platform == "pinterest":
             result = await self._download_pinterest(url, type)
             if result.get("status") != "success":
                 logger.warning(f"Pinterest failed: {result.get('message')}")
             return result
 
+        # ── Others (YouTube, Instagram, etc.) ─────────────────────
         else:
-            logger.info(f"📹 {platform} → yt-dlp | {type}")
+            logger.info(f"📹 {platform} → yt-dlp | type={type}")
             return await self.download_with_ytdlp(url, type)
 
 
