@@ -154,16 +154,6 @@ class Downloader:
         url: str = "",
         check_only: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Build yt-dlp options.
-
-        ✅ FIX BLACK SCREEN: TikTok video uses FFmpegMetadata + explicit
-           postprocessor_args key matching "ffmpegvideoconvertor" (lowercase)
-           which is what yt-dlp actually uses internally.
-
-        ✅ FIX AUDIO: Audio block runs LAST, clears all video postprocessors,
-           sets only FFmpegExtractAudio.
-        """
         platform = self._detect_platform(url)
         logger.info(f"🔍 Platform: {platform} | Type: {download_type}")
 
@@ -189,7 +179,6 @@ class Downloader:
             },
             "extractor_args": {
                 "youtube": {
-                    # Rotate per retry attempt in download_with_ytdlp
                     "player_client": ["tv", "android_sdkless", "web_safari", "ios"],
                     "skip": ["dash", "hls"],
                 },
@@ -207,17 +196,11 @@ class Downloader:
             common_opts["outtmpl"] = f"{DOWNLOAD_DIR}/%(id)s.%(ext)s"
             common_opts["max_filesize"] = MAX_FILE_SIZE
 
-        # Attach cookies (copied to writable /tmp/)
         if self._cookies_file and os.path.exists(self._cookies_file):
             common_opts["cookiefile"] = self._cookies_file
             logger.info(f"🍪 Using cookies: {self._cookies_file}")
         else:
             logger.warning("⚠️ No cookies — YouTube may block")
-
-        # ── AUDIO: set first as base, then platform may override format ──
-        # Audio block is handled LAST below — do NOT set here
-
-        # ── Platform-specific video settings ─────────────────────────
 
         if platform == "youtube":
             common_opts.update({
@@ -227,10 +210,8 @@ class Downloader:
             })
 
         elif platform == "tiktok":
+            # ✅ download_type "photo" is handled separately — skip here
             if download_type == "video":
-                # ✅ FIX BLACK SCREEN:
-                # Step 1: Try to select H.264 stream directly (no re-encode needed)
-                # Step 2: If unavailable, select any stream and re-encode with FFmpeg
                 common_opts["format"] = (
                     "bestvideo[vcodec^=avc1][height<=1080][ext=mp4]"
                     "+bestaudio[ext=m4a]/"
@@ -242,16 +223,12 @@ class Downloader:
                     common_opts["merge_output_format"] = "mp4"
                     common_opts["postprocessors"] = [
                         {
-                            # ✅ FIX: Use FFmpegVideoRemuxer first (fast, no quality loss)
-                            # then FFmpegVideoConvertor as safety net
                             "key": "FFmpegVideoConvertor",
                             "preferedformat": "mp4",
                         }
                     ]
-                    # ✅ FIX BLACK SCREEN: Correct key is lowercase "ffmpegvideoconvertor"
-                    # yt-dlp matches postprocessor_args keys case-insensitively
-                    # Force libx264 to guarantee H.264 output for Telegram
                     common_opts["postprocessor_args"] = {
+                        # ✅ Lowercase key — yt-dlp internal matching
                         "ffmpegvideoconvertor": [
                             "-vcodec", "libx264",
                             "-acodec", "aac",
@@ -259,7 +236,6 @@ class Downloader:
                             "-preset", "fast",
                             "-movflags", "+faststart",
                         ],
-                        # Also set for merger in case streams need merging
                         "ffmpegmerger": [
                             "-vcodec", "libx264",
                             "-acodec", "aac",
@@ -292,7 +268,6 @@ class Downloader:
                 "format": "best",
             })
 
-        # ── YouTube video format ──────────────────────────────────────
         if platform == "youtube" and download_type == "video":
             common_opts["format"] = (
                 "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
@@ -304,12 +279,10 @@ class Downloader:
                 common_opts["merge_output_format"] = "mp4"
 
         # ── AUDIO block — runs LAST, overrides ALL platform video opts ──
-        # ✅ FIX AUDIO: completely replace postprocessors and args
         if download_type == "audio":
             common_opts["format"] = (
                 "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
             )
-            # ✅ Replace ALL video postprocessors with audio-only extractor
             common_opts["postprocessors"] = (
                 [
                     {
@@ -321,9 +294,8 @@ class Downloader:
                 if not check_only
                 else []
             )
-            # ✅ Clear ALL video postprocessor_args (TikTok libx264 leak)
+            # ✅ Clear TikTok video args leak
             common_opts["postprocessor_args"] = {}
-            # ✅ Remove video-only keys
             common_opts.pop("merge_output_format", None)
             common_opts.pop("max_filesize", None)
             common_opts["prefer_ffmpeg"] = True
@@ -380,7 +352,6 @@ class Downloader:
 
                 filename = ydl.prepare_filename(info)
 
-                # Resolve postprocessed filename
                 if opts.get("postprocessors"):
                     base, _ = os.path.splitext(filename)
                     try:
@@ -394,7 +365,6 @@ class Downloader:
                         ext = "mp4"
                     filename = f"{base}.{ext}"
 
-                # ✅ FIX: Check multiple extensions
                 if not os.path.exists(filename):
                     base, _ = os.path.splitext(filename)
                     found = False
@@ -456,7 +426,7 @@ class Downloader:
                 return {"status": "error", "message": f"Error: {str(e)[:200]}"}
 
     # ─────────────────────────────────────────────
-    # TikTok Slideshow
+    # TikTok Slideshow / Photo
     # ─────────────────────────────────────────────
 
     def _is_slideshow_info(self, info: Dict[str, Any]) -> bool:
@@ -475,7 +445,14 @@ class Downloader:
         ext = (info.get("ext") or "").lower()
         return ext in IMAGE_EXTS
 
-    def _download_tiktok_slideshow_sync(self, url: str, base_opts: Dict[str, Any]) -> Dict[str, Any]:
+    def _download_tiktok_slideshow_sync(
+        self, url: str, base_opts: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        ✅ Download TikTok photo/slideshow directly.
+        Called both from auto-detection (video probe) and
+        explicit Photo button (type="photo").
+        """
         folder = os.path.join(DOWNLOAD_DIR, f"tiktok_slideshow_{uuid.uuid4().hex}")
         os.makedirs(folder, exist_ok=True)
         opts = dict(base_opts)
@@ -493,13 +470,22 @@ class Downloader:
             if isinstance(info, dict):
                 title = info.get("title") or title
                 duration = info.get("duration") or 0
+
         files = [
             os.path.join(folder, name)
             for name in sorted(os.listdir(folder))
             if os.path.splitext(name)[1].lstrip(".").lower() in IMAGE_EXTS
         ]
+
         if not files:
-            return {"status": "error", "message": "No images found"}
+            return {
+                "status": "error",
+                "message": (
+                    "រកមិនឃើញរូបភាពទេ។ "
+                    "Link នេះអាចជាវីដេអូ — សូមសាកល្បង Video ជំនួស។"
+                ),
+            }
+
         return {
             "status": "success",
             "media_kind": "slideshow",
@@ -591,14 +577,25 @@ class Downloader:
         if platform == "youtube":
             url = self._normalize_youtube_url(url)
 
-        # TikTok slideshow detection
+        # ✅ TikTok photo: skip probe, download slideshow directly
+        if platform == "tiktok" and type == "photo":
+            logger.info("🖼️ TikTok Photo button → download slideshow directly")
+            base_opts = self._get_opts("video", url)
+            return await loop.run_in_executor(
+                self.executor,
+                self._download_tiktok_slideshow_sync,
+                url,
+                base_opts,
+            )
+
+        # Auto-detect TikTok slideshow for video type
         if platform == "tiktok" and type == "video":
             try:
                 probe_opts = self._get_opts(type, url, check_only=True)
                 probe_opts["noplaylist"] = False
                 info = await loop.run_in_executor(self.executor, self._probe_sync, url, probe_opts)
                 if isinstance(info, dict) and self._is_slideshow_info(info):
-                    logger.info("🖼️ TikTok slideshow detected")
+                    logger.info("🖼️ TikTok slideshow auto-detected")
                     base_opts = self._get_opts(type, url)
                     return await loop.run_in_executor(
                         self.executor, self._download_tiktok_slideshow_sync, url, base_opts
@@ -606,7 +603,6 @@ class Downloader:
             except Exception as e:
                 logger.warning(f"Slideshow probe failed: {e}")
 
-        # ✅ Skip size check for audio (small) and TikTok (Cobalt handles it)
         skip_size_check = (type == "audio") or (platform == "tiktok")
         if not skip_size_check:
             check_opts = self._get_opts(type, url, check_only=True)
@@ -616,7 +612,6 @@ class Downloader:
             if size_check["status"] == "error":
                 return size_check
 
-        # Retry loop
         for attempt in range(1, self.max_retries + 1):
             opts = self._get_opts(type, url)
             ua = self.USER_AGENTS[(attempt - 1) % len(self.USER_AGENTS)]
@@ -657,9 +652,15 @@ class Downloader:
         platform = self._detect_platform(url)
 
         if platform == "tiktok":
+            # ✅ Photo button: direct slideshow download (no Cobalt)
+            if type == "photo":
+                logger.info("🖼️ TikTok photo → direct slideshow download")
+                return await self.download_with_ytdlp(url, type)
+
             if type == "audio":
                 logger.info("🎵 TikTok audio → yt-dlp")
                 return await self.download_with_ytdlp(url, type)
+
             logger.info("🎬 TikTok video → Cobalt API v7")
             try:
                 from src.cobalt_api import cobalt_downloader

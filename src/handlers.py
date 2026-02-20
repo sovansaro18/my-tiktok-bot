@@ -152,13 +152,49 @@ def premium_buy_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
+    """
+    ✅ TikTok → 3 buttons (Video / MP3 / Photo)
+    Other platforms → 2 buttons (Video / MP3)
+    """
+    if platform == "tiktok":
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"
+                    ),
+                    InlineKeyboardButton(
+                        text="🎵 MP3", callback_data="fmt_audio"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🖼️ រូបភាព (Photo)", callback_data="fmt_photo"
+                    ),
+                ],
+            ]
+        )
+    else:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"
+                    ),
+                    InlineKeyboardButton(
+                        text="🎵 អូឌីយ៉ូ (MP3)", callback_data="fmt_audio"
+                    ),
+                ]
+            ]
+        )
+
+
 # ─────────────────────────────────────────────
 # Helper: Message Deletion
 # ─────────────────────────────────────────────
 
-async def safe_delete_message(
-    bot: Bot, chat_id: int, message_id: int
-) -> bool:
+async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
     """Delete a Telegram message without raising exceptions."""
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
@@ -186,9 +222,7 @@ def check_daily_limit(
 ) -> tuple[bool, str, InlineKeyboardMarkup | None]:
     """
     Check if a free user has exceeded their daily download quota.
-
-    Returns:
-        (can_download, info_message, keyboard_or_None)
+    Returns: (can_download, info_message, keyboard_or_None)
     """
     if user_data.get("status") == "premium":
         return True, "", None
@@ -197,7 +231,6 @@ def check_daily_limit(
     daily_count = user_data.get("daily_download_count", 0)
     today = datetime.now(timezone.utc).date()
 
-    # Reset counter if it's a new day
     if not last_download_date or last_download_date.date() != today:
         return True, "", None
 
@@ -281,7 +314,7 @@ async def cmd_start(message: Message, state: FSMContext):
         "🤖 <b>អ្វីដែលបតអាចធ្វើបាន:</b>\n"
         "✅ ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
         "✅ គាំទ្រ: TikTok, Facebook, YouTube, Instagram, Pinterest\n"
-        "✅ ទាញយកជា Video ឬ Audio\n\n"
+        "✅ ទាញយកជា Video, Audio ឬ Photo (TikTok)\n\n"
         "🚫 <b>កំណត់:</b>\n"
         "❌ មិនគាំទ្រវីដេអូ Private\n"
         "❌ មិនគាំទ្រវីដេអូ Copyright\n"
@@ -305,7 +338,7 @@ async def cmd_start(message: Message, state: FSMContext):
             f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (នៅសល់: {remaining})\n"
             f"• គុណភាព: {FREE_MAX_QUALITY}\n\n"
             f"💎 Premium: <b>${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)\n"
-            "<i>ផ្ញើ link ហើយជ្រើស Video/Audio!</i>"
+            "<i>ផ្ញើ link ហើយជ្រើស Video/Audio/Photo!</i>"
         )
         await message.answer(
             welcome, parse_mode="HTML", reply_markup=premium_buy_keyboard()
@@ -416,7 +449,7 @@ async def handle_report_non_text(message: Message):
 
 @router.message(F.text.regexp(r"(https?://[^\s]+)"))
 async def handle_link(message: Message, state: FSMContext):
-    """Validate URL and ask user to choose Video or Audio format."""
+    """Validate URL and show format selection buttons."""
     user_id = message.from_user.id
     user_data, _ = await db.get_user(user_id)
 
@@ -435,23 +468,16 @@ async def handle_link(message: Message, state: FSMContext):
         )
         return
 
-    await state.update_data(url=url, url_message_id=message.message_id)
+    await state.update_data(url=url, platform=_platform, url_message_id=message.message_id)
     await state.set_state(DownloadState.waiting_for_format)
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"
-                ),
-                InlineKeyboardButton(
-                    text="🎵 អូឌីយ៉ូ (MP3)", callback_data="fmt_audio"
-                ),
-            ]
-        ]
-    )
+    # ✅ Show 3 buttons for TikTok, 2 buttons for others
+    keyboard = format_select_keyboard(_platform)
 
     info_text = "👇 សូមជ្រើសរើសប្រភេទ:\n\n"
+    if _platform == "tiktok":
+        info_text += "🎵 <b>MP3</b> — ទាញយកជាសំឡេង\n"
+        info_text += "🖼️ <b>Photo</b> — សម្រាប់ TikTok រូបភាព/Slideshow\n\n"
     if limit_msg:
         info_text += f"<i>{limit_msg}</i>"
 
@@ -467,7 +493,7 @@ async def handle_link(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("fmt_"))
 async def process_download_callback(callback: CallbackQuery, state: FSMContext):
-    """Handle Video/Audio format selection and execute download."""
+    """Handle Video/Audio/Photo format selection and execute download."""
     data = await state.get_data()
     url = data.get("url")
     url_message_id = data.get("url_message_id")
@@ -480,10 +506,23 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    download_type = "audio" if callback.data == "fmt_audio" else "video"
+    # ✅ Determine download type from callback data
+    if callback.data == "fmt_audio":
+        download_type = "audio"
+    elif callback.data == "fmt_photo":
+        download_type = "photo"
+    else:
+        download_type = "video"
+
+    # Label for progress message
+    type_label = {
+        "audio": "MP3",
+        "photo": "PHOTO",
+        "video": "VIDEO",
+    }.get(download_type, "VIDEO")
 
     progress_msg = await callback.message.edit_text(
-        f"⏳ <b>កំពុងទាញយក {download_type.upper()}...</b>\n"
+        f"⏳ <b>កំពុងទាញយក {type_label}...</b>\n"
         "<i>សូមរង់ចាំបន្តិច...</i>",
         parse_mode="HTML",
     )
@@ -525,7 +564,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # ── TikTok Slideshow ─────────────────────────────────────────
+    # ── TikTok Slideshow / Photo ─────────────────────────────────
     if (
         result.get("media_kind") == "slideshow"
         and isinstance(result.get("file_paths"), list)
@@ -540,7 +579,9 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
 
         if not paths:
             await progress_msg.edit_text(
-                "❌ <b>មិនអាចរកឃើញរូបភាពបានទេ</b>", parse_mode="HTML"
+                "❌ <b>មិនអាចរកឃើញរូបភាពបានទេ</b>\n\n"
+                "Link នេះអាចជាវីដេអូ — សូមសាកល្បង 🎬 <b>Video</b> ជំនួស។",
+                parse_mode="HTML",
             )
             await state.clear()
             return
@@ -549,12 +590,13 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         caption = (
             f"✅ <b>ទាញយករួចរាល់!</b>\n"
             f"📌 {safe_title}\n"
+            f"🖼️ រូបភាព {len(paths)} សន្លឹក\n"
             "🤖 @ravi_downloader_bot"
         )
 
         # Telegram media groups: max 10 per batch
         for i in range(0, len(paths), 10):
-            chunk = paths[i : i + 10]
+            chunk = paths[i: i + 10]
             media = [
                 InputMediaPhoto(
                     media=FSInputFile(p),
@@ -575,7 +617,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         except Exception:
             pass
 
-        # ✅ FIX 4.1: Record download AFTER successful send
+        # Record download AFTER successful send
         user_id = callback.from_user.id
         user_data, _ = await db.get_user(user_id)
         if user_data.get("status") != "premium":
@@ -590,11 +632,10 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             reply_markup=notification["keyboard"],
         )
 
-        # Remove image files + empty folder
+        # Cleanup image files + folder
         for p in paths:
             await safe_remove_file(p)
         try:
-            # ✅ FIX 1.3: Guard against empty paths list
             if paths:
                 folder = os.path.dirname(paths[0])
                 if folder and os.path.isdir(folder) and not os.listdir(folder):
@@ -654,7 +695,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         except Exception:
             pass
 
-        # ✅ FIX 4.1: Record download AFTER successful Telegram send only
+        # Record download AFTER successful Telegram send only
         user_id = callback.from_user.id
         user_data, _ = await db.get_user(user_id)
         if user_data.get("status") != "premium":
@@ -706,7 +747,6 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         )
 
     finally:
-        # Always cleanup downloaded file regardless of outcome
         if file_path:
             await safe_remove_file(file_path)
         await state.clear()
@@ -719,7 +759,6 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: Message):
     """Admin: Broadcast a message to all users."""
-    # ✅ FIX 2.2: Respond with unknown command instead of silent return
     if message.from_user.id != ADMIN_ID:
         await message.answer("⚠️ រកមិនឃើញពាក្យបញ្ជានេះទេ។")
         return
@@ -734,7 +773,6 @@ async def cmd_broadcast(message: Message):
         )
         return
 
-    # Validate HTML syntax with a preview send to admin
     preview_text = (
         "📢 <b>សេចក្តីជូនដំណឹង</b>\n\n"
         f"{text}\n\n"
@@ -807,7 +845,6 @@ async def cmd_broadcast(message: Message):
 @router.message(Command("stats"))
 async def cmd_stats(message: Message):
     """Admin: View bot statistics."""
-    # ✅ FIX 2.2: Respond instead of silent return
     if message.from_user.id != ADMIN_ID:
         await message.answer("⚠️ រកមិនឃើញពាក្យបញ្ជានេះទេ។")
         return
@@ -836,7 +873,6 @@ async def cmd_stats(message: Message):
 @router.message(Command("approve"))
 async def cmd_approve(message: Message):
     """Admin: Grant premium status to a user."""
-    # ✅ FIX 2.2: Respond instead of silent return
     if message.from_user.id != ADMIN_ID:
         await message.answer("⚠️ រកមិនឃើញពាក្យបញ្ជានេះទេ។")
         return
@@ -950,7 +986,6 @@ async def handle_close_info(callback: CallbackQuery):
 @router.message(F.photo)
 async def handle_receipt(message: Message):
     """Forward payment receipt photo to log channel."""
-    # ✅ FIX 2.3: Guard against LOG_CHANNEL_ID being None
     if not LOG_CHANNEL_ID:
         logger.warning("handle_receipt: LOG_CHANNEL_ID not configured")
         await message.answer(
