@@ -24,9 +24,6 @@ from src.config import (
     LOG_CHANNEL_ID,
     MAX_FILE_SIZE,
     DOWNLOAD_TIMEOUT,
-    FREE_DAILY_LIMIT,
-    FREE_MAX_QUALITY,
-    PREMIUM_PRICE,
     REPORT_CHANNEL_ID,
 )
 from src.database import db
@@ -131,31 +128,12 @@ def friendly_download_error(url: str, err: str) -> str:
 
 
 # ─────────────────────────────────────────────
-# Helper: Keyboards
+# Helper: Format Selection Keyboard
 # ─────────────────────────────────────────────
-
-def premium_buy_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"💳 ទិញ Premium ${PREMIUM_PRICE:.2f}",
-                    callback_data="buy_premium",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"ℹ️ ព័ត៌មាន Premium (${PREMIUM_PRICE:.2f})",
-                    callback_data="premium_info",
-                )
-            ],
-        ]
-    )
-
 
 def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
     """
-    ✅ TikTok → 3 buttons (Video / MP3 / Photo)
+    TikTok → 3 buttons (Video / MP3 / Photo)
     Other platforms → 2 buttons (Video / MP3)
     """
     if platform == "tiktok":
@@ -215,84 +193,6 @@ async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
 
 
 # ─────────────────────────────────────────────
-# Helper: Daily Limit Check
-# ─────────────────────────────────────────────
-
-def check_daily_limit(
-    user_data: dict,
-) -> tuple[bool, str, InlineKeyboardMarkup | None]:
-    """
-    Check if a free user has exceeded their daily download quota.
-    Returns: (can_download, info_message, keyboard_or_None)
-    """
-    if user_data.get("status") == "premium":
-        return True, "", None
-
-    last_download_date = user_data.get("last_download_date")
-    daily_count = user_data.get("daily_download_count", 0)
-    today = datetime.now(timezone.utc).date()
-
-    if not last_download_date or last_download_date.date() != today:
-        return True, "", None
-
-    if daily_count >= FREE_DAILY_LIMIT:
-        return (
-            False,
-            (
-                f"🚫 <b>អស់ការទាញយកប្រចាំថ្ងៃរបស់អ្នកហើយ!</b>\n\n"
-                f"📊 កំណត់: {FREE_DAILY_LIMIT} ដង/ថ្ងៃ\n"
-                f"⏰ សូមព្យាយាមម្តងទៀតនៅថ្ងៃស្អែក\n\n"
-                f"💎 <b>ចង់ប្រើមិនកំណត់?</b>\n"
-                f"Upgrade ទៅ Premium តម្លៃ <b>${PREMIUM_PRICE:.2f}</b> "
-                f"(បង់តែម្តង)"
-            ),
-            premium_buy_keyboard(),
-        )
-
-    remaining = FREE_DAILY_LIMIT - daily_count
-    return True, f"📊 នៅសល់: {remaining}/{FREE_DAILY_LIMIT} ដងសម្រាប់ថ្ងៃនេះ", None
-
-
-# ─────────────────────────────────────────────
-# Helper: Usage Notification
-# ─────────────────────────────────────────────
-
-def get_usage_notification(user_data: dict) -> dict:
-    """Build post-download usage summary message."""
-    if user_data.get("status") == "premium":
-        return {
-            "text": (
-                "✅ <b>ទាញយករួចរាល់!</b>\n\n"
-                "💎 <b>សមាជិកពិសេស Premium</b>\n"
-                "♾️ ទាញយកបានមិនកំណត់\n"
-                "🚀 ល្បឿនលឿនបំផុត\n"
-                "🎬 គុណភាព 1080p\n\n"
-                "<i>អរគុណសម្រាប់ការជឿទុកចិត្ត!</i>"
-            ),
-            "keyboard": None,
-        }
-
-    daily_count = user_data.get("daily_download_count", 0)
-    remaining = max(0, FREE_DAILY_LIMIT - daily_count)
-    filled = int((daily_count / FREE_DAILY_LIMIT) * 5)
-    progress_bar = "🟩" * filled + "⬜" * (5 - filled)
-
-    text = (
-        f"📢 <b>ស្ថានភាពការទាញយក</b>\n\n"
-        f"🎞️ <b>ទាញយកថ្ងៃនេះ:</b> {daily_count}/{FREE_DAILY_LIMIT}\n"
-        f"📊 <b>នៅសល់:</b> {remaining} ដងទៀត\n"
-        f"{progress_bar}\n"
-        f"🎬 គុណភាព: {FREE_MAX_QUALITY}\n\n"
-        "💎 <b>Premium (បង់តែម្តង)</b>\n"
-        "• ទាញយកមិនកំណត់ ♾️\n"
-        "• គុណភាព 1080p 🎬\n"
-        "• ល្បឿនលឿន 🚀\n"
-        f"• តម្លៃ: <b>${PREMIUM_PRICE:.2f}</b>"
-    )
-    return {"text": text, "keyboard": premium_buy_keyboard()}
-
-
-# ─────────────────────────────────────────────
 # Commands: /start
 # ─────────────────────────────────────────────
 
@@ -309,41 +209,20 @@ async def cmd_start(message: Message, state: FSMContext):
             bot=message.bot,
         )
 
-    status = user_data.get("status", "free")
-    welcome = f"👋 <b>សួស្តី {escape(message.from_user.full_name)}!</b>\n\n"
-    welcome += (
+    welcome = (
+        f"👋 <b>សួស្តី {escape(message.from_user.full_name)}!</b>\n\n"
         "🤖 <b>អ្វីដែលបតអាចធ្វើបាន:</b>\n"
         "✅ ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
         "✅ គាំទ្រ: TikTok, Facebook, YouTube, Instagram, Pinterest\n"
-        "✅ ទាញយកជា Video, Audio ឬ Photo (TikTok)\n\n"
+        "✅ ទាញយកជា Video, Audio ឬ Photo (TikTok)\n"
+        "✅ ប្រើប្រាស់ <b>ឥតគិតថ្លៃ</b> ទាំងស្រុង!\n\n"
         "🚫 <b>កំណត់:</b>\n"
         "❌ មិនគាំទ្រវីដេអូ Private\n"
         "❌ មិនគាំទ្រវីដេអូ Copyright\n"
-        "❌ ទំហំតូចជាង 49MB\n\n"
+        "❌ ទំហំអតិបរមា 49MB\n\n"
+        "<i>គ្រាន់តែផ្ញើ Link ហើយខ្ញុំទាញយកឱ្យ!</i> 🚀"
     )
-
-    if status == "premium":
-        welcome += (
-            "💎 <b>ស្ថានភាព: PREMIUM</b>\n\n"
-            "♾️ ទាញយកបានមិនកំណត់\n"
-            "🎬 គុណភាព 1080p\n"
-            "🚀 ល្បឿនលឿនបំផុត\n\n"
-            "<i>គ្រាន់តែផ្ញើ link ហើយខ្ញុំទាញយកឱ្យ!</i>"
-        )
-        await message.answer(welcome, parse_mode="HTML")
-    else:
-        daily_count = user_data.get("daily_download_count", 0)
-        remaining = max(0, FREE_DAILY_LIMIT - daily_count)
-        welcome += (
-            "🆓 <b>ស្ថានភាព: ឥតគិតថ្លៃ</b>\n\n"
-            f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (នៅសល់: {remaining})\n"
-            f"• គុណភាព: {FREE_MAX_QUALITY}\n\n"
-            f"💎 Premium: <b>${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)\n"
-            "<i>ផ្ញើ link ហើយជ្រើស Video/Audio/Photo!</i>"
-        )
-        await message.answer(
-            welcome, parse_mode="HTML", reply_markup=premium_buy_keyboard()
-        )
+    await message.answer(welcome, parse_mode="HTML")
 
 
 # ─────────────────────────────────────────────
@@ -353,36 +232,16 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(Command("plan"))
 async def cmd_plan(message: Message, state: FSMContext):
     await state.clear()
-    user_id = message.from_user.id
-    user_data, _ = await db.get_user(user_id)
-    status = user_data.get("status", "free")
-
-    if status == "premium":
-        text = (
-            f"📊 <b>ព័ត៌មានគណនី</b>\n\n"
-            f"👤 {escape(message.from_user.full_name)}\n"
-            f"🏷 ស្ថានភាព: <b>PREMIUM 💎</b>\n\n"
-            "♾️ ទាញយកមិនកំណត់\n"
-            "🎬 គុណភាព 1080p\n"
-            "🚀 ល្បឿនលឿន\n\n"
-            "<i>អរគុណ! ❤️</i>"
-        )
-        await message.answer(text, parse_mode="HTML")
-    else:
-        daily_count = user_data.get("daily_download_count", 0)
-        remaining = max(0, FREE_DAILY_LIMIT - daily_count)
-        text = (
-            f"📊 <b>ព័ត៌មានគណនី</b>\n\n"
-            f"👤 {escape(message.from_user.full_name)}\n"
-            f"🏷 ស្ថានភាព: <b>ឥតគិតថ្លៃ 🆓</b>\n\n"
-            f"• {FREE_DAILY_LIMIT} ដង/ថ្ងៃ (នៅសល់: {remaining})\n"
-            f"• គុណភាព: {FREE_MAX_QUALITY}\n\n"
-            f"💎 Premium: <b>${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)\n"
-            "• ♾️ មិនកំណត់ | 🎬 1080p | 🚀 លឿន"
-        )
-        await message.answer(
-            text, parse_mode="HTML", reply_markup=premium_buy_keyboard()
-        )
+    text = (
+        f"📊 <b>ព័ត៌មានគណនី</b>\n\n"
+        f"👤 {escape(message.from_user.full_name)}\n"
+        f"🏷 ស្ថានភាព: <b>ឥតគិតថ្លៃ ✅</b>\n\n"
+        "♾️ ទាញយកបានគ្មានកំណត់\n"
+        "🎬 Video, Audio, Photo\n"
+        "🚀 ប្រើបានភ្លាម គ្មានការចុះឈ្មោះ\n\n"
+        "<i>គ្រាន់តែផ្ញើ Link ហើយទាញយកបានជាសំណប!</i>"
+    )
+    await message.answer(text, parse_mode="HTML")
 
 
 # ─────────────────────────────────────────────
@@ -452,12 +311,7 @@ async def handle_report_non_text(message: Message):
 async def handle_link(message: Message, state: FSMContext):
     """Validate URL and show format selection buttons."""
     user_id = message.from_user.id
-    user_data, _ = await db.get_user(user_id)
-
-    can_download, limit_msg, limit_kb = check_daily_limit(user_data)
-    if not can_download:
-        await message.answer(limit_msg, parse_mode="HTML", reply_markup=limit_kb)
-        return
+    await db.get_user(user_id)  # Register user if new
 
     raw_url = message.text.strip()
     try:
@@ -472,15 +326,12 @@ async def handle_link(message: Message, state: FSMContext):
     await state.update_data(url=url, platform=_platform, url_message_id=message.message_id)
     await state.set_state(DownloadState.waiting_for_format)
 
-    # ✅ Show 3 buttons for TikTok, 2 buttons for others
     keyboard = format_select_keyboard(_platform)
 
     info_text = "👇 សូមជ្រើសរើសប្រភេទ:\n\n"
     if _platform == "tiktok":
         info_text += "🎵 <b>MP3</b> — ទាញយកជាសំឡេង\n"
-        info_text += "🖼️ <b>Photo</b> — សម្រាប់ TikTok រូបភាព/Slideshow\n\n"
-    if limit_msg:
-        info_text += f"<i>{limit_msg}</i>"
+        info_text += "🖼️ <b>Photo</b> — សម្រាប់ TikTok រូបភាព/Slideshow\n"
 
     format_msg = await message.answer(
         info_text, reply_markup=keyboard, parse_mode="HTML"
@@ -507,7 +358,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # ✅ Determine download type from callback data
+    # Determine download type from callback data
     if callback.data == "fmt_audio":
         download_type = "audio"
     elif callback.data == "fmt_photo":
@@ -618,18 +469,6 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         except Exception:
             pass
 
-        # Record download AFTER successful send
-        user_id = callback.from_user.id
-        user_data, _ = await db.get_user(user_id)
-        if user_data.get("status") != "premium":
-            updated = await db.record_download(user_id)
-            notification = get_usage_notification(updated)
-            await callback.message.answer(
-                notification["text"],
-                parse_mode="HTML",
-                reply_markup=notification["keyboard"],
-            )
-
         # Cleanup image files + folder
         for p in paths:
             await safe_remove_file(p)
@@ -692,19 +531,6 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             await progress_msg.delete()
         except Exception:
             pass
-
-        # Record download AFTER successful Telegram send only
-        user_id = callback.from_user.id
-        user_data, _ = await db.get_user(user_id)
-        if user_data.get("status") != "premium":
-            updated = await db.record_download(user_id)
-            notification = get_usage_notification(updated)
-            await callback.message.answer(
-                notification["text"],
-                parse_mode="HTML",
-                reply_markup=notification["keyboard"],
-            )
-        # ✅ Premium users: no usage notification shown
 
     except TelegramBadRequest as e:
         err_str = str(e).lower()
@@ -774,6 +600,7 @@ async def cmd_broadcast(message: Message):
         f"{text}\n\n"
         "<i>សារផ្លូវការពី Admin Bot</i>"
     )
+
     try:
         preview = await message.bot.send_message(
             chat_id=ADMIN_ID,
@@ -848,15 +675,11 @@ async def cmd_stats(message: Message):
     try:
         stats = await db.count_users()
         total_downloads = await db.total_downloads()
-        revenue = stats["premium"] * PREMIUM_PRICE
 
         text = (
             f"📊 <b>ស្ថិតិបត</b>\n\n"
-            f"👥 សរុប: <b>{stats['total']}</b>\n"
-            f"💎 Premium: <b>{stats['premium']}</b>\n"
-            f"🆓 Free: <b>{stats['free']}</b>\n\n"
-            f"⬇️ Downloads: <b>{total_downloads}</b>\n\n"
-            f"💰 Revenue: <b>${revenue:.2f}</b>\n\n"
+            f"👥 Users សរុប: <b>{stats['total']}</b>\n\n"
+            f"⬇️ Downloads សរុប: <b>{total_downloads}</b>\n\n"
             f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
         )
         await message.answer(text, parse_mode="HTML")
@@ -866,171 +689,13 @@ async def cmd_stats(message: Message):
         await message.answer(f"❌ Error: {escape(str(e))}", parse_mode="HTML")
 
 
-@router.message(Command("approve"))
-async def cmd_approve(message: Message):
-    """Admin: Grant premium status to a user."""
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("⚠️ រកមិនឃើញពាក្យបញ្ជានេះទេ។")
-        return
-
-    try:
-        target_id = int(message.text.split()[1])
-        success = await db.set_premium(target_id)
-
-        if success:
-            await message.answer(f"✅ User {target_id} → PREMIUM ហើយ។")
-            await message.bot.send_message(
-                target_id,
-                "🎉 <b>អបអរសាទរ!</b> គណនីរបស់អ្នក Upgrade ទៅ PREMIUM ហើយ! 💎",
-                parse_mode="HTML",
-            )
-            await send_log(
-                f"👮 Admin approved Premium: <code>{target_id}</code>",
-                bot=message.bot,
-            )
-        else:
-            await message.answer("❌ Update បរាជ័យ។ សូមពិនិត្យ ID។")
-
-    except (IndexError, ValueError):
-        await message.answer("⚠️ ប្រើ: /approve [user_id]")
-
-
 # ─────────────────────────────────────────────
-# Payment Handlers
-# ─────────────────────────────────────────────
-
-@router.callback_query(F.data == "buy_premium")
-async def handle_buy_premium(callback: CallbackQuery):
-    """Show QR payment image."""
-    payment_qr_path = "payment.jpg"
-
-    if not os.path.exists(payment_qr_path):
-        await callback.message.edit_text(
-            "❌ <b>រកមិនឃើញ QR ទូទាត់!</b>\n\nទាក់ទង Admin។",
-            parse_mode="HTML",
-        )
-        logger.error("payment.jpg not found!")
-        return
-
-    caption = (
-        f"💳 <b>Premium (បង់តែម្តង)</b>\n\n"
-        f"💎 តម្លៃ: <b>${PREMIUM_PRICE:.2f}</b>\n"
-        "♾️ ទាញយកមិនកំណត់ + 1080p\n\n"
-        "📱 <b>របៀបបង់:</b>\n"
-        "1️⃣ ស្កេន QR Code\n"
-        f"2️⃣ បង់ <b>${PREMIUM_PRICE:.2f}</b>\n"
-        "3️⃣ ថតរូប Screenshot\n"
-        "4️⃣ ផ្ញើ Screenshot មកខ្ញុំ\n"
-        "5️⃣ រង់ Admin អនុញ្ញាត\n\n"
-        f"🆔 User ID: <code>{callback.from_user.id}</code>"
-    )
-
-    try:
-        await callback.message.delete()
-        await callback.message.answer_photo(
-            photo=FSInputFile(payment_qr_path),
-            caption=caption,
-            parse_mode="HTML",
-        )
-        await send_log(
-            f"💰 Premium Interest\n"
-            f"User: {escape(callback.from_user.full_name)} "
-            f"(<code>{callback.from_user.id}</code>)",
-            bot=callback.bot,
-        )
-    except Exception as e:
-        logger.error(f"QR show error: {e}")
-        await callback.answer("❌ មានបញ្ហា។ ព្យាយាមម្តងទៀត។", show_alert=True)
-
-
-@router.callback_query(F.data == "premium_info")
-async def handle_premium_info(callback: CallbackQuery):
-    """Show premium benefits."""
-    text = (
-        f"💎 <b>Premium ពេញមួយជីវិត</b>\n\n"
-        f"💰 <b>តម្លៃ: ${PREMIUM_PRICE:.2f}</b> (បង់តែម្តង)\n\n"
-        "✅ ទាញយកមិនកំណត់ ♾️\n"
-        "✅ គុណភាព 1080p 🎬\n"
-        "✅ ល្បឿនលឿន 🚀\n"
-        "✅ គ្រប់វេទិកា\n"
-        "✅ ជំនួយអាទិភាព 💬\n\n"
-        "<b>បង់តែម្តង — ប្រើរហូត!</b>"
-    )
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"💳 ទិញ ${PREMIUM_PRICE:.2f}",
-                    callback_data="buy_premium",
-                )
-            ],
-            [InlineKeyboardButton(text="❌ បិទ", callback_data="close_info")],
-        ]
-    )
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-
-
-@router.callback_query(F.data == "close_info")
-async def handle_close_info(callback: CallbackQuery):
-    await callback.message.delete()
-
-
-# ─────────────────────────────────────────────
-# Receipt Handler (Photo Upload)
-# ─────────────────────────────────────────────
-
-@router.message(F.photo)
-async def handle_receipt(message: Message):
-    """Forward payment receipt photo to log channel."""
-    if not LOG_CHANNEL_ID:
-        logger.warning("handle_receipt: LOG_CHANNEL_ID not configured")
-        await message.answer(
-            "✅ <b>ទទួលបានរូបភាព!</b>\n"
-            "សូមទាក់ទង Admin ដោយផ្ទាល់ ព្រោះ channel មិនទាន់ configured។",
-            parse_mode="HTML",
-        )
-        return
-
-    caption = escape(message.caption or "No caption")
-    user_name = escape(message.from_user.full_name)
-    user_id = message.from_user.id
-
-    try:
-        await message.bot.send_photo(
-            chat_id=LOG_CHANNEL_ID,
-            photo=message.photo[-1].file_id,
-            caption=(
-                "🧾 <b>វិក័យបត្រទូទាត់</b>\n\n"
-                f"👤 {user_name}\n"
-                f"🆔 <code>{user_id}</code>\n"
-                f"📝 {caption}\n\n"
-                f"👉 <code>/approve {user_id}</code>"
-            ),
-            parse_mode="HTML",
-        )
-        await message.answer(
-            "✅ <b>ទទួលវិក័យបត្ររួចរាល់!</b>\n"
-            "Admin នឹង Upgrade គណនីអ្នកឆាប់ៗ។",
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.error(f"Receipt forward error: {e}")
-        await message.answer(
-            "⚠️ មានបញ្ហា។ សូមទាក់ទង Admin ដោយផ្ទាល់។",
-            parse_mode="HTML",
-        )
-
-        # ─────────────────────────────────────────────
 # User Block / Leave Detection
 # ─────────────────────────────────────────────
 
-
 @router.my_chat_member()
 async def handle_bot_blocked(event: ChatMemberUpdated):
-    """
-    Fires when user blocks, unblocks, or kicks the bot.
-    Telegram sends my_chat_member update automatically.
-    """
+    """Fires when user blocks, unblocks, or kicks the bot."""
     old_status = event.old_chat_member.status
     new_status = event.new_chat_member.status
     user = event.from_user
@@ -1039,10 +704,9 @@ async def handle_bot_blocked(event: ChatMemberUpdated):
     full_name = escape(user.full_name or "")
     username = f"@{escape(user.username)}" if user.username else "(no username)"
 
-    # ── User blocked or kicked the bot ──────────────────────────
+    # User blocked or kicked the bot
     if new_status in ("kicked", "left") and old_status == "member":
         logger.info(f"🚫 User blocked bot: {user_id}")
-
         await send_log(
             f"🚫 <b>User បានចាកចេញ / Block Bot</b>\n\n"
             f"👤 {full_name}\n"
@@ -1052,10 +716,9 @@ async def handle_bot_blocked(event: ChatMemberUpdated):
         )
         return
 
-    # ── User unblocked the bot ───────────────────────────────────
+    # User unblocked the bot
     if new_status == "member" and old_status in ("kicked", "left"):
         logger.info(f"✅ User unblocked bot: {user_id}")
-
         await send_log(
             f"✅ <b>User បានត្រឡប់មកវិញ / Unblock Bot</b>\n\n"
             f"👤 {full_name}\n"
