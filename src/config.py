@@ -14,16 +14,6 @@ PORT_STR = os.getenv("PORT", "10000")
 
 
 # ====== Business Logic Constants ======
-# Premium pricing
-PREMIUM_PRICE = 3.00
-
-# Free user limits
-FREE_DAILY_LIMIT = 2
-FREE_MAX_QUALITY = "480p"
-
-# Premium benefits
-PREMIUM_MAX_QUALITY = "1080p"
-
 # File constraints
 MAX_FILE_SIZE = 49 * 1024 * 1024  # 49MB (Telegram limit is 50MB, we use 49 for safety)
 MAX_URL_LENGTH = 2048
@@ -45,8 +35,7 @@ ALLOWED_DOMAINS = (
 
 # Rate limiting
 RATE_LIMIT_REQUESTS = 3  # Number of requests
-RATE_LIMIT_WINDOW = 10  # Time window in seconds
-
+RATE_LIMIT_WINDOW = 10   # Time window in seconds
 RATE_LIMIT_MESSAGE_COOLDOWN = 30
 
 SUPPORTED_PLATFORMS = list(ALLOWED_DOMAINS)
@@ -118,9 +107,3 @@ try:
     REPORT_CHANNEL_ID = int(REPORT_CHANNEL_ID_STR)
 except ValueError:
     raise ValueError("❌ REPORT_CHANNEL_ID must be a valid integer (channel ID)!")
-
-
-# ====== Helper Functions ======
-def format_price(price: float) -> str:
-    """Format price consistently."""
-    return f"${price:.2f}"
