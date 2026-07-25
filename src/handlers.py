@@ -13,7 +13,7 @@ from aiogram.types import (
     FSInputFile,
     InputMediaPhoto,
 )
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
@@ -579,13 +579,13 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
 # ─────────────────────────────────────────────
 
 @router.message(Command("broadcast"))
-async def cmd_broadcast(message: Message):
-    """Admin: Broadcast a message to all users."""
+async def cmd_broadcast(message: Message, command: CommandObject):
+    """Admin: Broadcast a message to all active users."""
     if message.from_user.id != ADMIN_ID:
         await message.answer("⚠️ រកមិនឃើញពាក្យបញ្ជានេះទេ។")
         return
 
-    text = message.text.replace("/broadcast", "", 1).strip()
+    text = (command.args or "").strip()
     if not text:
         await message.answer(
             "⚠️ <b>របៀបប្រើ:</b> /broadcast [សារ]\n\n"
@@ -595,25 +595,27 @@ async def cmd_broadcast(message: Message):
         )
         return
 
-    preview_text = (
+    broadcast_body = (
         "📢 <b>សេចក្តីជូនដំណឹង</b>\n\n"
         f"{text}\n\n"
         "<i>សារផ្លូវការពី Admin Bot</i>"
     )
 
+    active_users = await db.list_active_users()
+    total = len(active_users)
+    if total == 0:
+        await message.answer("⚠️ មិនមាន user សកម្មសម្រាប់ផ្សាយទេ។")
+        return
+
+    # Validate HTML entities by sending a preview to the admin first.
+    # Kept (not deleted) so the admin has a record of what was sent.
     try:
-        preview = await message.bot.send_message(
+        await message.bot.send_message(
             chat_id=ADMIN_ID,
-            text=preview_text,
+            text=f"📣 <b>កំពុងផ្សាយទៅ {total} user សកម្ម</b>\n\n{broadcast_body}",
             parse_mode="HTML",
             disable_notification=True,
         )
-        try:
-            await message.bot.delete_message(
-                chat_id=ADMIN_ID, message_id=preview.message_id
-            )
-        except Exception:
-            pass
     except TelegramBadRequest as te:
         if "can't parse entities" in str(te).lower():
             await message.answer(
@@ -625,43 +627,70 @@ async def cmd_broadcast(message: Message):
             return
         raise
 
-    all_users = await db.list_users()
-    total = len(all_users)
-    success = failed = 0
-
     progress_msg = await message.answer(
         f"📢 <b>កំពុងផ្សាយ...</b>\nសរុប: {total}",
         parse_mode="HTML",
     )
 
-    for idx, user in enumerate(all_users, 1):
-        user_id = user.get("user_id")
-        try:
-            await message.bot.send_message(
-                chat_id=user_id,
-                text=preview_text,
+    success = failed = blocked = 0
+    BATCH = 25
+
+    for i in range(0, total, BATCH):
+        batch = active_users[i:i + BATCH]
+        tasks = [
+            message.bot.send_message(
+                chat_id=u.get("user_id"),
+                text=broadcast_body,
                 parse_mode="HTML",
             )
-            success += 1
-            if idx % 20 == 0:
-                await asyncio.sleep(1)
-            if idx % 10 == 0 or idx == total:
-                await progress_msg.edit_text(
-                    f"📢 <b>កំពុងផ្សាយ...</b>\n"
-                    f"✅ {success} | ❌ {failed} | {idx}/{total}",
-                    parse_mode="HTML",
-                )
-        except Exception as e:
-            failed += 1
-            logger.warning(f"Broadcast failed for {user_id}: {e}")
+            for u in batch
+            if u.get("user_id") is not None
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for res in results:
+            if isinstance(res, Exception):
+                failed += 1
+                err = str(res).lower()
+                if ("blocked by the user" in err
+                        or "bot was blocked" in err
+                        or "user is deactivated" in err):
+                    blocked += 1
+                else:
+                    logger.warning(f"Broadcast send failed: {res}")
+            else:
+                success += 1
 
-    await progress_msg.edit_text(
+        done = min(i + BATCH, total)
+        await progress_msg.edit_text(
+            f"📢 <b>កំពុងផ្សាយ...</b>\n"
+            f"✅ {success} | ❌ {failed} | {done}/{total}",
+            parse_mode="HTML",
+        )
+        if done < total:
+            await asyncio.sleep(1)
+
+    # Mark blocked recipients inactive so future broadcasts skip them.
+    if blocked:
+        blocked_ids = [
+            u.get("user_id")
+            for u in active_users
+            if u.get("user_id") is not None
+        ]
+        for bid in blocked_ids:
+            await db.set_user_active(bid, False)
+
+    summary = (
         f"✅ <b>ផ្សាយរួចរាល់!</b>\n\n"
-        f"📊 សរុប: {total}\n✅ {success} | ❌ {failed}",
-        parse_mode="HTML",
+        f"📊 សរុប: {total}\n"
+        f"✅ ជោគជ័យ: {success}\n"
+        f"❌ បរាជ័យ: {failed}"
     )
+    if blocked:
+        summary += f"\n🚫 បាន block: {blocked} (បានដកចេញពីបញ្ជីសកម្ម)"
+    await progress_msg.edit_text(summary, parse_mode="HTML")
     await send_log(
-        f"📢 Broadcast done: {success}/{total}", bot=message.bot
+        f"📢 Broadcast done: {success}/{total} (blocked: {blocked})",
+        bot=message.bot,
     )
 
 
@@ -674,13 +703,17 @@ async def cmd_stats(message: Message):
 
     try:
         stats = await db.count_users()
+        active = await db.count_active_users()
         total_downloads = await db.total_downloads()
 
         text = (
-            f"📊 <b>ស្ថិតិបត</b>\n\n"
-            f"👥 Users សរុប: <b>{stats['total']}</b>\n\n"
+            f"📊 <b>ស្ថិតិ Bot</b>\n\n"
+            f"👥 Users សរុប: <b>{stats['total']}</b>\n"
+            f"🟢 Users សកម្ម: <b>{active}</b>\n"
+            f"⭐ Premium: <b>{stats['premium']}</b>\n"
+            f"🆓 Free: <b>{stats['free']}</b>\n\n"
             f"⬇️ Downloads សរុប: <b>{total_downloads}</b>\n\n"
-            f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+            f"<i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</i>"
         )
         await message.answer(text, parse_mode="HTML")
 
@@ -707,6 +740,7 @@ async def handle_bot_blocked(event: ChatMemberUpdated):
     # User blocked or kicked the bot
     if new_status in ("kicked", "left") and old_status == "member":
         logger.info(f"🚫 User blocked bot: {user_id}")
+        await db.set_user_active(user_id, False)
         await send_log(
             f"🚫 <b>User បានចាកចេញ / Block Bot</b>\n\n"
             f"👤 {full_name}\n"
@@ -719,6 +753,7 @@ async def handle_bot_blocked(event: ChatMemberUpdated):
     # User unblocked the bot
     if new_status == "member" and old_status in ("kicked", "left"):
         logger.info(f"✅ User unblocked bot: {user_id}")
+        await db.set_user_active(user_id, True)
         await send_log(
             f"✅ <b>User បានត្រឡប់មកវិញ / Unblock Bot</b>\n\n"
             f"👤 {full_name}\n"

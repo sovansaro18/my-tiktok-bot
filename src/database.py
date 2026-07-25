@@ -25,6 +25,15 @@ class BaseDatabase:
     async def list_users(self) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
+    async def set_user_active(self, user_id: int, active: bool) -> bool:
+        raise NotImplementedError
+
+    async def list_active_users(self) -> List[Dict[str, Any]]:
+        raise NotImplementedError
+
+    async def count_active_users(self) -> int:
+        raise NotImplementedError
+
     async def total_downloads(self) -> int:
         raise NotImplementedError
 
@@ -39,6 +48,7 @@ def _default_user(user_id: int) -> Dict[str, Any]:
     return {
         "user_id": user_id,
         "status": "free",
+        "is_active": True,
         "joined_date": datetime.now(timezone.utc),
         "daily_download_count": 0,
         "last_download_date": None,
@@ -96,6 +106,34 @@ class MongoDatabase(BaseDatabase):
         except PyMongoError as e:
             logger.error(f"⚠️ Failed to list users: {e}")
             return []
+
+    async def set_user_active(self, user_id: int, active: bool) -> bool:
+        try:
+            await self.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"is_active": active}},
+                upsert=True,
+            )
+            return True
+        except PyMongoError as e:
+            logger.error(f"⚠️ Failed to set active={active} for {user_id}: {e}")
+            return False
+
+    async def list_active_users(self) -> List[Dict[str, Any]]:
+        try:
+            return await self.users.find(
+                {"is_active": {"$ne": False}}, {"_id": 0, "user_id": 1}
+            ).to_list(length=None)
+        except PyMongoError as e:
+            logger.error(f"⚠️ Failed to list active users: {e}")
+            return []
+
+    async def count_active_users(self) -> int:
+        try:
+            return await self.users.count_documents({"is_active": {"$ne": False}})
+        except PyMongoError as e:
+            logger.error(f"⚠️ Failed to count active users: {e}")
+            return 0
 
     async def total_downloads(self) -> int:
         try:
@@ -166,6 +204,21 @@ class NullDatabase(BaseDatabase):
 
     async def list_users(self) -> List[Dict[str, Any]]:
         return [{"user_id": u["user_id"]} for u in self._users.values()]
+
+    async def set_user_active(self, user_id: int, active: bool) -> bool:
+        user, _ = await self.get_user(user_id)
+        user["is_active"] = active
+        return True
+
+    async def list_active_users(self) -> List[Dict[str, Any]]:
+        return [
+            {"user_id": u["user_id"]}
+            for u in self._users.values()
+            if u.get("is_active", True)
+        ]
+
+    async def count_active_users(self) -> int:
+        return sum(1 for u in self._users.values() if u.get("is_active", True))
 
     async def total_downloads(self) -> int:
         return int(sum(u.get("daily_download_count", 0) for u in self._users.values()))

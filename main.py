@@ -9,9 +9,9 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, BotCommandScopeChat
 
-from src.config import BOT_TOKEN, PORT, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
+from src.config import BOT_TOKEN, PORT, ADMIN_ID, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
 from src.handlers import router
 from src.middleware import RateLimitMiddleware
 from src.database import db
@@ -150,6 +150,17 @@ async def main() -> None:
             BotCommand(command="report", description="ជូនដំណឹង"),
         ]
     )
+    # Admin-only commands, visible just in the admin's command menu.
+    try:
+        await _bot.set_my_commands(
+            [
+                BotCommand(command="stats", description="ស្ថិតិ bot (Admin)"),
+                BotCommand(command="broadcast", description="ផ្សាយសារ (Admin)"),
+            ],
+            scope=BotCommandScopeChat(chat_id=ADMIN_ID),
+        )
+    except Exception as e:
+        logger.warning(f"Could not register admin command menu: {e}")
     
     # Initialize dispatcher
     _dp = Dispatcher()
