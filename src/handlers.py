@@ -94,7 +94,7 @@ def friendly_download_error(url: str, err: str) -> str:
             "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
             "នេះជាវីដេអូ <b>Private</b> (ឬ Friends-only/Group-private) "
             "ហើយ <b>ខុសគោលការណ៍របស់ Bot</b> "
-            "ដូច្នេះ Bot <b>មិនអាចទាញយកបាន</b>។\n\n"
+            "ដូច្នេះ Bot <b>មិនអាចទាញយកបាន</b>。\n\n"
             f"✅ សូមផ្ញើ Link វីដេអូដែលជា <b>Public</b> ពី {plat} មកវិញ។"
         )
     if any(m in e for m in login_markers):
@@ -103,27 +103,27 @@ def friendly_download_error(url: str, err: str) -> str:
             f"វីដេអូនេះមានការកំណត់ <b>Age-restricted/Login required</b> "
             f"ពី {plat}។ Bot មិនអាចទាញយកវីដេអូប្រភេទនេះបានទេ។\n\n"
             "✅ សូមសាកល្បងវីដេអូ <b>Public</b> ផ្សេង "
-            "ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+            "ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin。"
         )
     if any(m in e for m in geo_markers):
         return (
             "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
             f"វីដេអូនេះអាចមានការកំណត់ <b>តំបន់/ប្រទេស</b> ពី {plat}។\n\n"
             "✅ សូមសាកល្បង Link ផ្សេង "
-            "ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+            "ឬប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin。"
         )
     if any(m in e for m in copyright_markers):
         return (
             "❌ <b>មិនអាចទាញយកបានទេ</b>\n\n"
             "វីដេអូនេះអាចជាវីដេអូដែលមាន <b>Copyright/Blocked</b> "
-            "ហើយស្ថិតក្រៅគោលការណ៍ Bot។\n\n"
-            "✅ សូមសាកល្បង Link ផ្សេង។"
+            "ហើយស្ថិតក្រៅគោលការណ៍ Bot。\n\n"
+            "✅ សូមសាកល្បង Link ផ្សេង。"
         )
     return (
         "❌ <b>មានបញ្ហាក្នុងការទាញយក</b>\n\n"
         "សូមព្យាយាមម្តងទៀត ឬផ្ញើ Link ផ្សេង។ "
         "បើបញ្ហានេះកើតឡើងជាបន្តបន្ទាប់ "
-        "សូមប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin។"
+        "សូមប្រើ <b>/report</b> ដើម្បីជូនដំណឹងមក Admin。"
     )
 
 
@@ -253,7 +253,7 @@ async def cmd_report(message: Message, state: FSMContext):
     await state.set_state(ReportState.waiting_for_report)
     await message.answer(
         "📩 <b>សូមវាយសារជូនដំណឹង!</b>\n\n"
-        "សរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ។",
+        "សរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ。",
         parse_mode="HTML",
     )
 
@@ -262,7 +262,7 @@ async def cmd_report(message: Message, state: FSMContext):
 async def handle_report(message: Message, state: FSMContext):
     report_text = (message.text or "").strip()
     if not report_text:
-        await message.answer("⚠️ សូមវាយសារជូនដំណឹង។")
+        await message.answer("⚠️ សូមវាយសារជូនដំណឹង。")
         return
 
     user_id = message.from_user.id
@@ -287,10 +287,10 @@ async def handle_report(message: Message, state: FSMContext):
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-        await message.answer("✅ បានផ្ញើ report ទៅ Admin រួចរាល់។")
+        await message.answer("✅ បានផ្ញើ report ទៅ Admin រួចរាល់。")
     except Exception as e:
         logger.error(f"Failed to send report: {e}")
-        await message.answer("❌ មិនអាចផ្ញើ report បានទេ។ សូមព្យាយាមម្តងទៀត។")
+        await message.answer("❌ មិនអាចផ្ញើ report បានទេ។ សូមព្យាយាមម្តងទៀត。")
     finally:
         await state.clear()
 
@@ -298,7 +298,7 @@ async def handle_report(message: Message, state: FSMContext):
 @router.message(ReportState.waiting_for_report)
 async def handle_report_non_text(message: Message):
     await message.answer(
-        "⚠️ សូមផ្ញើជា <b>អត្ថបទ</b> ដើម្បីជូនដំណឹង។",
+        "⚠️ សូមផ្ញើជា <b>អត្ថបទ</b> ដើម្បីជូនដំណឹង。",
         parse_mode="HTML",
     )
 
@@ -354,7 +354,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
 
     if not url:
         await callback.message.edit_text(
-            "⚠️ សម័យផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត។"
+            "⚠️ សម័យផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត。"
         )
         return
 
@@ -389,7 +389,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         logger.warning(f"⏱ Download timeout: {url}")
         await progress_msg.edit_text(
             "❌ <b>ការទាញយកយូរពេកហើយ</b>\n\n"
-            "សូមព្យាយាមជាមួយវីដេអូខ្លីជាងនេះ។",
+            "សូមព្យាយាមជាមួយវីដេអូខ្លីជាងនេះ。",
             parse_mode="HTML",
         )
         await send_log(
@@ -432,7 +432,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         if not paths:
             await progress_msg.edit_text(
                 "❌ <b>មិនអាចរកឃើញរូបភាពបានទេ</b>\n\n"
-                "Link នេះអាចជាវីដេអូ — សូមសាកល្បង 🎬 <b>Video</b> ជំនួស។",
+                "Link នេះអាចជាវីដេអូ — សូមសាកល្បង 🎬 <b>Video</b> ជំនួស。",
                 parse_mode="HTML",
             )
             await state.clear()
@@ -493,7 +493,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
                 f"❌ <b>ឯកសារធំពេកសម្រាប់ Telegram</b>\n\n"
                 f"📊 ទំហំ: {file_size / 1024 / 1024:.1f}MB\n"
                 f"⚠️ កំណត់: {MAX_FILE_SIZE / 1024 / 1024:.0f}MB\n\n"
-                "សូមព្យាយាមវីដេអូគុណភាពទាបជាង ឬជ្រើស Audio។",
+                "សូមព្យាយាមវីដេអូគុណភាពទាបជាង ឬជ្រើស Audio。",
                 parse_mode="HTML",
             )
             await safe_remove_file(file_path)
@@ -538,10 +538,10 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             error_msg = (
                 "❌ <b>ឯកសារធំពេក</b>\n\n"
                 "⚠️ Telegram កំណត់: 50MB\n"
-                "សូមជ្រើស Audio ឬ Link វីដេអូខ្លីជាង។"
+                "សូមជ្រើស Audio ឬ Link វីដេអូខ្លីជាង。"
             )
         elif "wrong file identifier" in err_str:
-            error_msg = "❌ ទម្រង់ឯកសារខុស។ សូមព្យាយាមម្តងទៀត។"
+            error_msg = "❌ ទម្រង់ឯកសារខុស។ សូមព្យាយាមម្តងទៀត。"
         else:
             error_msg = (
                 f"❌ មិនអាចបញ្ជូនបានទេ។\n\n"
@@ -558,7 +558,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.error(f"Upload failed: {e}", exc_info=True)
         await callback.message.answer(
-            f"❌ មានបញ្ហា upload ។\n\n<code>{escape(str(e)[:200])}</code>",
+            f"❌ មានបញ្ហា upload 🧠\n\n<code>{escape(str(e)[:200])}</code>",
             parse_mode="HTML",
         )
         await send_log(
@@ -608,7 +608,6 @@ async def cmd_broadcast(message: Message, command: CommandObject):
         return
 
     # Validate HTML entities by sending a preview to the admin first.
-    # Kept (not deleted) so the admin has a record of what was sent.
     try:
         await message.bot.send_message(
             chat_id=ADMIN_ID,
@@ -705,15 +704,18 @@ async def cmd_stats(message: Message):
         stats = await db.count_users()
         active = await db.count_active_users()
         total_downloads = await db.total_downloads()
+        active_downloads = await db.total_active_downloads()
 
         text = (
-            f"📊 <b>ស្ថិតិ Bot</b>\n\n"
-            f"👥 Users សរុប: <b>{stats['total']}</b>\n"
-            f"🟢 Users សកម្ម: <b>{active}</b>\n"
-            f"⭐ Premium: <b>{stats['premium']}</b>\n"
-            f"🆓 Free: <b>{stats['free']}</b>\n\n"
-            f"⬇️ Downloads សរុប: <b>{total_downloads}</b>\n\n"
-            f"<i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</i>"
+            f"📊 <b>ស្ថិតិ Bot ផ្លូវការ</b>\n\n"
+            f"👥 <b>ទិន្នន័យអ្នកប្រើប្រាស់:</b>\n"
+            f"• អ្នកប្រើប្រាស់សរុប (Lifetime): <b>{stats['total']}</b> នាក់\n"
+            f"• អ្នកប្រើប្រាស់សកម្ម (Active): <b>{active}</b> នាក់\n"
+            f"• គណនី Premium: <b>{stats['premium']}</b> | Free: <b>{stats['free']}</b>\n\n"
+            f"📥 <b>ទិន្នន័យនៃការទាញយក (Downloads):</b>\n"
+            f"• ការទាញយកសរុបទាំងអស់: <b>{total_downloads}</b> ដង\n"
+            f"• ការទាញយកពី Active Users: <b>{active_downloads}</b> ដង\n\n"
+            f"🕒 <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</i>"
         )
         await message.answer(text, parse_mode="HTML")
 
