@@ -48,21 +48,17 @@ class Downloader:
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.max_retries = 3
         self._shutdown = False
-        # ✅ Copy cookies to writable /tmp/ at startup
-        # Render.com mounts /etc/secrets/ as read-only → yt-dlp crashes
         self._cookies_file = self._prepare_cookies_file()
 
     def _prepare_cookies_file(self) -> Optional[str]:
         """
-        Copy cookies from read-only mount to writable /tmp/.
-        Render.com mounts /etc/secrets/ as read-only — yt-dlp crashes
-        if it tries to update cookies in a read-only location.
+        Resolve a cookies file from env and stage a writable copy in /tmp.
+        Container platforms mount secrets read-only, and yt-dlp needs to
+        update cookies in place, so we keep a private writable copy.
         """
         candidates = [
             os.getenv("YTDLP_COOKIES"),
             os.getenv("COOKIES_FILE"),
-            "/etc/secrets/cookies.txt",
-            "cookies.txt",
         ]
         source = None
         for path in candidates:
@@ -71,22 +67,17 @@ class Downloader:
                 break
 
         if not source:
-            logger.warning("⚠️ No cookies.txt found")
+            logger.warning("⚠️ No cookies configured (YTDLP_COOKIES/COOKIES_FILE)")
             return None
-
-        writable_prefixes = ("/tmp", "/home", "/app", DOWNLOAD_DIR)
-        if any(source.startswith(p) for p in writable_prefixes):
-            logger.info(f"🍪 Cookies writable: {source}")
-            return source
 
         tmp_cookies = "/tmp/yt_cookies.txt"
         try:
             shutil.copy2(source, tmp_cookies)
             os.chmod(tmp_cookies, 0o600)
-            logger.info(f"🍪 Cookies copied: {source} → {tmp_cookies}")
+            logger.info(f"🍪 Cookies staged: {source} → {tmp_cookies}")
             return tmp_cookies
         except Exception as e:
-            logger.error(f"❌ Failed to copy cookies: {e}")
+            logger.error(f"❌ Failed to stage cookies: {e}")
             return source
 
     def shutdown(self, wait: bool = True) -> None:
@@ -163,7 +154,6 @@ class Downloader:
 
         ✅ FIX BLACK SCREEN: postprocessor_args key = lowercase "ffmpegvideoconvertor"
         ✅ FIX AUDIO: Audio block runs LAST, clears all video postprocessor_args
-        ✅ FIX COOKIES: Use writable /tmp/yt_cookies.txt copy
         """
         platform = self._detect_platform(url)
         logger.info(f"🔍 Platform: {platform} | Type: {download_type}")
@@ -207,7 +197,6 @@ class Downloader:
             common_opts["outtmpl"] = f"{DOWNLOAD_DIR}/%(id)s.%(ext)s"
             common_opts["max_filesize"] = MAX_FILE_SIZE
 
-        # ✅ Use writable cookies path (copied from /etc/secrets/)
         if self._cookies_file and os.path.exists(self._cookies_file):
             common_opts["cookiefile"] = self._cookies_file
             logger.info(f"🍪 Using cookies: {self._cookies_file}")
