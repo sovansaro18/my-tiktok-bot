@@ -37,6 +37,9 @@ class BaseDatabase:
     async def total_downloads(self) -> int:
         raise NotImplementedError
 
+    async def total_active_downloads(self) -> int:
+        raise NotImplementedError
+
     async def record_download(self, user_id: int) -> Dict[str, Any]:
         raise NotImplementedError
 
@@ -144,6 +147,18 @@ class MongoDatabase(BaseDatabase):
             logger.error(f"⚠️ Failed to aggregate total downloads: {e}")
             return 0
 
+    async def total_active_downloads(self) -> int:
+        try:
+            pipeline = [
+                {"$match": {"is_active": {"$ne": False}}},
+                {"$group": {"_id": None, "total": {"$sum": "$daily_download_count"}}}
+            ]
+            result = await self.users.aggregate(pipeline).to_list(length=1)
+            return int(result[0].get("total", 0)) if result else 0
+        except PyMongoError as e:
+            logger.error(f"⚠️ Failed to aggregate total active downloads: {e}")
+            return 0
+
     async def record_download(self, user_id: int) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         try:
@@ -222,6 +237,15 @@ class NullDatabase(BaseDatabase):
 
     async def total_downloads(self) -> int:
         return int(sum(u.get("daily_download_count", 0) for u in self._users.values()))
+
+    async def total_active_downloads(self) -> int:
+        return int(
+            sum(
+                u.get("daily_download_count", 0)
+                for u in self._users.values()
+                if u.get("is_active") is not False
+            )
+        )
 
     async def record_download(self, user_id: int) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
