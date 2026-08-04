@@ -128,6 +128,99 @@ def friendly_download_error(url: str, err: str) -> str:
 
 
 # ─────────────────────────────────────────────
+# Helper: Feature Menu Keyboard
+# ─────────────────────────────────────────────
+
+def feature_menu_keyboard() -> InlineKeyboardMarkup:
+    """Main feature menu shown on /start."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📥 របៀបទាញយក", callback_data="feat_howto"
+                ),
+                InlineKeyboardButton(
+                    text="🌐 វេទិកាគាំទ្រ", callback_data="feat_platforms"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎬 ប្រភេទទាញយក", callback_data="feat_formats"
+                ),
+                InlineKeyboardButton(
+                    text="📊 គណនីរបស់ខ្ញុំ", callback_data="feat_plan"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🚫 កំណត់ប្រើប្រាស់", callback_data="feat_limits"
+                ),
+                InlineKeyboardButton(
+                    text="📩 ជូនដំណឹង Admin", callback_data="feat_report"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❓ សំណួរញឹកញាប់", callback_data="feat_faq"
+                ),
+            ],
+        ]
+    )
+
+
+FEATURE_PANELS = {
+    "feat_howto": (
+        "📥 <b>របៀបទាញយក</b>\n\n"
+        "1️⃣ ចម្លង Link វីដេអូពីវេទិកាល្បីៗ\n"
+        "2️⃣ ផ្ញើ Link មក Bot\n"
+        "3️⃣ ជ្រើសរើសប្រភេទ (Video / Audio / Photo)\n"
+        "4️⃣ រង់ចាំ Bot ទាញយក និងបញ្ជូនមកវិញ\n\n"
+        "<i>ងាយស្រួល គ្រាន់តែផ្ញើ Link!</i> 🚀"
+    ),
+    "feat_platforms": (
+        "🌐 <b>វេទិកាគាំទ្រ</b>\n\n"
+        "✅ TikTok\n"
+        "✅ Facebook\n"
+        "✅ YouTube\n"
+        "✅ Instagram\n"
+        "✅ Pinterest\n\n"
+        "<i>ផ្ញើ Link ពីវេទិកាខាងលើមក Bot បានភ្លាម!</i>"
+    ),
+    "feat_formats": (
+        "🎬 <b>ប្រភេទទាញយក</b>\n\n"
+        "🎬 <b>Video (MP4)</b> — ទាញយកជាវីដេអូ\n"
+        "🎵 <b>Audio (MP3)</b> — ទាញយកជាសំឡេង\n"
+        "🖼️ <b>Photo</b> — សម្រាប់ TikTok Slideshow\n\n"
+        "<i>ជ្រើសរើសប្រភេទបន្ទាប់ពីផ្ញើ Link!</i>"
+    ),
+    "feat_plan": (
+        "📊 <b>គណនីរបស់ខ្ញុំ</b>\n\n"
+        f"🏷 ស្ថានភាព: <b>ឥតគិតថ្លៃ ✅</b>\n\n"
+        "♾️ ទាញយកបានគ្មានកំណត់\n"
+        "🎬 Video, Audio, Photo\n"
+        "🚀 ប្រើបានភ្លាម គ្មានការចុះឈ្មោះ"
+    ),
+    "feat_limits": (
+        "🚫 <b>កំណត់ប្រើប្រាស់</b>\n\n"
+        "❌ មិនគាំទ្រវីដេអូ Private\n"
+        "❌ មិនគាំទ្រវីដេអូ Copyright\n"
+        "❌ មិនគាំទ្រវីដេអូ Age-restricted\n"
+        "⚠️ ទំហំអតិបរមា 49MB\n\n"
+        "<i>សូមផ្ញើ Link ដែលជា Public ប៉ុណ្ណោះ!</i>"
+    ),
+    "feat_faq": (
+        "❓ <b>សំណួរញឹកញាប់</b>\n\n"
+        "<b>Q: តើ Bot ឥតគិតថ្លៃទេ?</b>\n"
+        "A: បាទ/ចាស ឥតគិតថ្លៃ ទាំងស្រុង!\n\n"
+        "<b>Q: ធ្វើយ៉ាងណាខ្លា បើទាញយកមិនបាន?</b>\n"
+        "A: សូមប្រើ <b>/report</b> ដើម្បីជូនដំណឹង Admin\n\n"
+        "<b>Q: ធ្វើយ៉ាងណាបើ Link មិនសម?</b>\n"
+        "A: ផ្ញើ Link ត្រឹមត្រូវពីវេទិកាគាំទ្រប៉ុណ្ណោះ"
+    ),
+}
+
+
+# ─────────────────────────────────────────────
 # Helper: Format Selection Keyboard
 # ─────────────────────────────────────────────
 
@@ -211,18 +304,64 @@ async def cmd_start(message: Message, state: FSMContext):
 
     welcome = (
         f"👋 <b>សួស្តី {escape(message.from_user.full_name)}!</b>\n\n"
-        "🤖 <b>អ្វីដែលបតអាចធ្វើបាន:</b>\n"
-        "✅ ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
-        "✅ គាំទ្រ: TikTok, Facebook, YouTube, Instagram, Pinterest\n"
-        "✅ ទាញយកជា Video, Audio ឬ Photo (TikTok)\n"
-        "✅ ប្រើប្រាស់ <b>ឥតគិតថ្លៃ</b> ទាំងស្រុង!\n\n"
-        "🚫 <b>កំណត់:</b>\n"
-        "❌ មិនគាំទ្រវីដេអូ Private\n"
-        "❌ មិនគាំទ្រវីដេអូ Copyright\n"
-        "❌ ទំហំអតិបរមា 49MB\n\n"
-        "<i>គ្រាន់តែផ្ញើ Link ហើយខ្ញុំទាញយកឱ្យ!</i> 🚀"
+        "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
+        "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
+        "<i>👆 សូមចុចប៊ូតុងខាងក្រោម ដើម្បីស្វែងយល់ដឹង!</i>"
     )
-    await message.answer(welcome, parse_mode="HTML")
+    await message.answer(
+        welcome, parse_mode="HTML", reply_markup=feature_menu_keyboard()
+    )
+
+
+# ─────────────────────────────────────────────
+# Callback: Feature Menu
+# ─────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("feat_"))
+async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
+    """Handle feature menu button presses."""
+    await callback.answer()
+
+    if callback.data == "feat_report":
+        await state.set_state(ReportState.waiting_for_report)
+        await callback.message.edit_text(
+            "📩 <b>សូមវាយសារជូនដំណឹង!</b>\n\n"
+            "សរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ។",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_back")]
+                ]
+            ),
+        )
+        return
+
+    if callback.data == "feat_back":
+        await state.clear()
+        welcome = (
+            f"👋 <b>សួស្តី {escape(callback.from_user.full_name)}!</b>\n\n"
+            "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
+            "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
+            "<i>👆 សូមចុចប៊ូតុងខាងក្រោម ដើម្បីស្វែងយល់ដឹង!</i>"
+        )
+        await callback.message.edit_text(
+            welcome, parse_mode="HTML", reply_markup=feature_menu_keyboard()
+        )
+        return
+
+    panel_text = FEATURE_PANELS.get(callback.data)
+    if panel_text is None:
+        return
+
+    await callback.message.edit_text(
+        panel_text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_back")]
+            ]
+        ),
+    )
 
 
 # ─────────────────────────────────────────────
