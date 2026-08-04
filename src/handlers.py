@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from types import SimpleNamespace
 from html import escape
 from datetime import datetime, timezone
 
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 class DownloadState(StatesGroup):
     waiting_for_format = State()
+    waiting_for_url = State()
 
 
 class ReportState(StatesGroup):
@@ -145,7 +147,7 @@ def feature_menu_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🎬 ប្រភេទទាញយក", callback_data="feat_formats"
+                    text="🎬 ទាញយកវីដេអូ", callback_data="feat_formats"
                 ),
                 InlineKeyboardButton(
                     text="📊 គណនីរបស់ខ្ញុំ", callback_data="feat_plan"
@@ -187,11 +189,10 @@ FEATURE_PANELS = {
         "<i>ផ្ញើ Link ពីវេទិកាខាងលើមក Bot បានភ្លាម!</i>"
     ),
     "feat_formats": (
-        "🎬 <b>ប្រភេទទាញយក</b>\n\n"
+        "🎬 <b>ទាញយកវីដេអូ</b>\n\n"
         "🎬 <b>Video (MP4)</b> — ទាញយកជាវីដេអូ\n"
-        "🎵 <b>Audio (MP3)</b> — ទាញយកជាសំឡេង\n"
-        "🖼️ <b>Photo</b> — សម្រាប់ TikTok Slideshow\n\n"
-        "<i>ជ្រើសរើសប្រភេទបន្ទាប់ពីផ្ញើ Link!</i>"
+        "🎵 <b>Audio (MP3)</b> — ទាញយកជាសំឡេង\n\n"
+        "<i>សូមជ្រើសរើសប្រភេទដែលអ្នកចង់ទាញយក។</i>"
     ),
     "feat_plan": (
         "📊 <b>គណនីរបស់ខ្ញុំ</b>\n\n"
@@ -223,6 +224,21 @@ FEATURE_PANELS = {
 # ─────────────────────────────────────────────
 # Helper: Format Selection Keyboard
 # ─────────────────────────────────────────────
+
+def download_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎬 Video (MP4)", callback_data="fmt_video"
+                ),
+                InlineKeyboardButton(
+                    text="🎵 Audio (MP3)", callback_data="fmt_audio"
+                ),
+            ]
+        ]
+    )
+
 
 def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
     """
@@ -349,6 +365,16 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    if callback.data == "feat_formats":
+        await state.set_state(DownloadState.waiting_for_url)
+        await callback.message.edit_text(
+            "🎬 <b>ទាញយកវីដេអូ</b>\n\n"
+            "សូមជ្រើសរើសប្រភេទដែលអ្នកចង់ទាញយក:",
+            parse_mode="HTML",
+            reply_markup=download_type_keyboard(),
+        )
+        return
+
     panel_text = FEATURE_PANELS.get(callback.data)
     if panel_text is None:
         return
@@ -462,6 +488,29 @@ async def handle_link(message: Message, state: FSMContext):
         )
         return
 
+    current_state = await state.get_state()
+    stored_data = await state.get_data()
+    selected_type = stored_data.get("download_type")
+
+    if (
+        current_state == DownloadState.waiting_for_url.state
+        and selected_type in ("audio", "video")
+    ):
+        await state.update_data(
+            url=url,
+            platform=_platform,
+            url_message_id=message.message_id,
+        )
+        await state.set_state(DownloadState.waiting_for_format)
+        download_context = SimpleNamespace(
+            message=message,
+            data=f"fmt_{selected_type}",
+            from_user=message.from_user,
+            bot=message.bot,
+        )
+        await process_download_callback(download_context, state)
+        return
+
     await state.update_data(url=url, platform=_platform, url_message_id=message.message_id)
     await state.set_state(DownloadState.waiting_for_format)
 
@@ -490,6 +539,20 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
     url_message_id = data.get("url_message_id")
     format_message_id = data.get("format_message_id")
     file_path = None
+
+    if await state.get_state() == DownloadState.waiting_for_url.state:
+        if callback.data == "fmt_audio":
+            selected_type = "audio"
+        elif callback.data == "fmt_video":
+            selected_type = "video"
+        else:
+            return
+        await state.update_data(
+            download_type=selected_type,
+            format_message_id=callback.message.message_id,
+        )
+        await callback.message.edit_text("សូមបញ្ជូល Link Video ដើម្បីទាញយក")
+        return
 
     if not url:
         await callback.message.edit_text(
@@ -577,25 +640,10 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             await state.clear()
             return
 
-        safe_title = escape(str(result.get("title", "TikTok Photo")))
-        caption = (
-            f"✅ <b>ទាញយករួចរាល់!</b>\n"
-            f"📌 {safe_title}\n"
-            f"🖼️ រូបភាព {len(paths)} សន្លឹក\n"
-            "🤖 @ravi_downloader_bot"
-        )
-
         # Telegram media groups: max 10 per batch
         for i in range(0, len(paths), 10):
             chunk = paths[i: i + 10]
-            media = [
-                InputMediaPhoto(
-                    media=FSInputFile(p),
-                    caption=(caption if i == 0 and j == 0 else None),
-                    parse_mode=("HTML" if i == 0 and j == 0 else None),
-                )
-                for j, p in enumerate(chunk)
-            ]
+            media = [InputMediaPhoto(media=FSInputFile(p)) for p in chunk]
             await callback.message.answer_media_group(media)
 
         # Cleanup UI messages
@@ -639,27 +687,14 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             await state.clear()
             return
 
-    safe_title = escape(str(result.get("title", "Unknown")))
-    safe_duration = escape(str(result.get("duration", 0)))
-    caption = (
-        f"✅ <b>ទាញយករួចរាល់!</b>\n"
-        f"📌 {safe_title}\n"
-        f"⏱ {safe_duration}វិ\n"
-        "🤖 @ravi_downloader_bot"
-    )
-
     try:
         await progress_msg.edit_text("📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
 
         file_input = FSInputFile(file_path)
         if download_type == "audio":
-            await callback.message.answer_audio(
-                file_input, caption=caption, parse_mode="HTML"
-            )
+            await callback.message.answer_audio(file_input)
         else:
-            await callback.message.answer_video(
-                file_input, caption=caption, parse_mode="HTML"
-            )
+            await callback.message.answer_video(file_input)
 
         # Cleanup UI messages
         chat_id = callback.message.chat.id
