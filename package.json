@@ -4,6 +4,7 @@
   "private": true,
   "description": "Telegram video downloader bot (Python)",
   "scripts": {
+    "build": "echo 'Python project - build handled by Dockerfile'",
     "start": "python main.py"
   },
   "dependencies": {}
