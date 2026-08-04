@@ -1,0 +1,10 @@
+{
+  "name": "project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telegram video downloader bot (Python)",
+  "scripts": {
+    "start": "python main.py"
+  },
+  "dependencies": {}
+}
