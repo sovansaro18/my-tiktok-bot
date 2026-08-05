@@ -330,9 +330,8 @@ async def cmd_start(message: Message, state: FSMContext):
 
     welcome = (
         f"👋 <b>សួស្តី {escape(message.from_user.full_name)}!</b>\n\n"
-        "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
+        "👇 សូមជ្រើសរើសមុខងារដែលអ្នកចង់ប្រើប្រាស់!\n"
         "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
-        "<i>👆 សូមចុចប៊ូតុងខាងក្រោម ដើម្បីស្វែងយល់ដឹង!</i>"
     )
     await message.answer(
         welcome, parse_mode="HTML", reply_markup=feature_menu_keyboard()
