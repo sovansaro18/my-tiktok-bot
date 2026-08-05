@@ -10,6 +10,7 @@ import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeChat
 
@@ -150,7 +151,7 @@ async def main() -> None:
     _bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        session=aiohttp.ClientSession(connector=_connector),
+        session=AiohttpSession(connector=_connector),
     )
 
     # Register command menu (non-fatal if the network is temporarily down).
