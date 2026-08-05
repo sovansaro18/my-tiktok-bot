@@ -279,7 +279,7 @@ def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
 
 
 # ─────────────────────────────────────────────
-# Helper: Message Deletion
+# Helper: Message Deletion & Editing
 # ─────────────────────────────────────────────
 
 async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
@@ -300,6 +300,16 @@ async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
         logger.error(f"❌ Unexpected error deleting message {message_id}: {e}")
         return False
 
+async def safe_edit_text(message: Message, new_text: str, parse_mode: str = "HTML") -> Message:
+    """Safely edit a message to avoid TelegramBadRequest (e.g. message can't be edited or identical text)."""
+    try:
+        return await message.edit_text(new_text, parse_mode=parse_mode)
+    except TelegramBadRequest as e:
+        logger.warning(f"⚠️ safe_edit_text ignored TelegramBadRequest: {e}")
+        return message # Just return the original message if edit fails
+    except Exception as e:
+        logger.error(f"❌ safe_edit_text encountered unexpected error: {e}")
+        return message
 
 # ─────────────────────────────────────────────
 # Commands: /start
@@ -340,15 +350,10 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
 
     if callback.data == "feat_report":
         await state.set_state(ReportState.waiting_for_report)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             "📩 <b>សូមវាយសារជូនដំណឹង!</b>\n\n"
             "សរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ។",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_back")]
-                ]
-            ),
+            parse_mode="HTML"
         )
         return
 
@@ -360,34 +365,43 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
             "<i>👆 សូមចុចប៊ូតុងខាងក្រោម ដើម្បីស្វែងយល់ដឹង!</i>"
         )
-        await callback.message.edit_text(
-            welcome, parse_mode="HTML", reply_markup=feature_menu_keyboard()
-        )
+        try:
+            await callback.message.edit_text(
+                welcome, parse_mode="HTML", reply_markup=feature_menu_keyboard()
+            )
+        except Exception as e:
+            logger.warning(f"Ignore edit error on back: {e}")
         return
 
     if callback.data == "feat_formats":
         await state.set_state(DownloadState.waiting_for_url)
-        await callback.message.edit_text(
-            "🎬 <b>ទាញយកវីដេអូ</b>\n\n"
-            "សូមជ្រើសរើសប្រភេទដែលអ្នកចង់ទាញយក:",
-            parse_mode="HTML",
-            reply_markup=download_type_keyboard(),
-        )
+        try:
+            await callback.message.edit_text(
+                "🎬 <b>ទាញយកវីដេអូ</b>\n\n"
+                "សូមជ្រើសរើសប្រភេទដែលអ្នកចង់ទាញយក:",
+                parse_mode="HTML",
+                reply_markup=download_type_keyboard(),
+            )
+        except Exception:
+            pass
         return
 
     panel_text = FEATURE_PANELS.get(callback.data)
     if panel_text is None:
         return
 
-    await callback.message.edit_text(
-        panel_text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_back")]
-            ]
-        ),
-    )
+    try:
+        await callback.message.edit_text(
+            panel_text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_back")]
+                ]
+            ),
+        )
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────
@@ -492,6 +506,7 @@ async def handle_link(message: Message, state: FSMContext):
     stored_data = await state.get_data()
     selected_type = stored_data.get("download_type")
 
+    # If user selected a default type in /start menu before sending the URL
     if (
         current_state == DownloadState.waiting_for_url.state
         and selected_type in ("audio", "video")
@@ -502,8 +517,15 @@ async def handle_link(message: Message, state: FSMContext):
             url_message_id=message.message_id,
         )
         await state.set_state(DownloadState.waiting_for_format)
+        
+        # Send a new message instead of modifying the user's message directly
+        progress_msg = await message.answer(
+            f"⏳ <b>កំពុងដំណើរការ...</b>\n",
+            parse_mode="HTML",
+        )
+        
         download_context = SimpleNamespace(
-            message=message,
+            message=progress_msg, # Pass the bot's newly created message as context
             data=f"fmt_{selected_type}",
             from_user=message.from_user,
             bot=message.bot,
@@ -532,8 +554,23 @@ async def handle_link(message: Message, state: FSMContext):
 # ─────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("fmt_"))
-async def process_download_callback(callback: CallbackQuery, state: FSMContext):
-    """Handle Video/Audio/Photo format selection and execute download."""
+async def process_download_callback_from_query(callback: CallbackQuery, state: FSMContext):
+    """Wrapper to handle actual callback queries (button clicks)"""
+    # Answer the callback query to remove loading state on button
+    await callback.answer()
+    
+    # Create context similar to SimpleNamespace for consistency
+    download_context = SimpleNamespace(
+        message=callback.message,
+        data=callback.data,
+        from_user=callback.from_user,
+        bot=callback.bot,
+    )
+    await process_download_callback(download_context, state)
+
+
+async def process_download_callback(callback: SimpleNamespace, state: FSMContext):
+    """Core download logic handling both direct links and button clicks."""
     data = await state.get_data()
     url = data.get("url")
     url_message_id = data.get("url_message_id")
@@ -551,13 +588,11 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             download_type=selected_type,
             format_message_id=callback.message.message_id,
         )
-        await callback.message.edit_text("សូមបញ្ជូល Link Video ដើម្បីទាញយក")
+        await safe_edit_text(callback.message, "សូមបញ្ជូល Link Video ដើម្បីទាញយក")
         return
 
     if not url:
-        await callback.message.edit_text(
-            "⚠️ សម័យផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត。"
-        )
+        await safe_edit_text(callback.message, "⚠️ សម័យផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត。")
         return
 
     # Determine download type from callback data
@@ -575,7 +610,8 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         "video": "VIDEO",
     }.get(download_type, "VIDEO")
 
-    progress_msg = await callback.message.edit_text(
+    # Safely edit the message, if it fails just keep using the message object
+    progress_msg = await safe_edit_text(callback.message,
         f"⏳ <b>កំពុងទាញយក {type_label}...</b>\n"
         "<i>សូមរង់ចាំបន្តិច...</i>",
         parse_mode="HTML",
@@ -589,7 +625,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         )
     except asyncio.TimeoutError:
         logger.warning(f"⏱ Download timeout: {url}")
-        await progress_msg.edit_text(
+        await safe_edit_text(progress_msg,
             "❌ <b>ការទាញយកយូរពេកហើយ</b>\n\n"
             "សូមព្យាយាមជាមួយវីដេអូខ្លីជាងនេះ。",
             parse_mode="HTML",
@@ -605,7 +641,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
     # ── Handle download errors ───────────────────────────────────
     if result["status"] == "error":
         raw_error = str(result.get("message", "Unknown error"))
-        await progress_msg.edit_text(
+        await safe_edit_text(progress_msg,
             friendly_download_error(url, raw_error), parse_mode="HTML"
         )
         await send_log(
@@ -623,7 +659,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         result.get("media_kind") == "slideshow"
         and isinstance(result.get("file_paths"), list)
     ):
-        await progress_msg.edit_text("📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
+        await safe_edit_text(progress_msg, "📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
 
         paths = [
             p
@@ -632,7 +668,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
         ]
 
         if not paths:
-            await progress_msg.edit_text(
+            await safe_edit_text(progress_msg,
                 "❌ <b>មិនអាចរកឃើញរូបភាពបានទេ</b>\n\n"
                 "Link នេះអាចជាវីដេអូ — សូមសាកល្បង 🎬 <b>Video</b> ជំនួស。",
                 parse_mode="HTML",
@@ -676,7 +712,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
     if os.path.exists(file_path):
         file_size = os.path.getsize(file_path)
         if file_size > MAX_FILE_SIZE:
-            await progress_msg.edit_text(
+            await safe_edit_text(progress_msg,
                 f"❌ <b>ឯកសារធំពេកសម្រាប់ Telegram</b>\n\n"
                 f"📊 ទំហំ: {file_size / 1024 / 1024:.1f}MB\n"
                 f"⚠️ កំណត់: {MAX_FILE_SIZE / 1024 / 1024:.0f}MB\n\n"
@@ -688,7 +724,7 @@ async def process_download_callback(callback: CallbackQuery, state: FSMContext):
             return
 
     try:
-        await progress_msg.edit_text("📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
+        await safe_edit_text(progress_msg, "📤 <b>កំពុងបញ្ជូន...</b>", parse_mode="HTML")
 
         file_input = FSInputFile(file_path)
         if download_type == "audio":
@@ -834,7 +870,7 @@ async def cmd_broadcast(message: Message, command: CommandObject):
                 success += 1
 
         done = min(i + BATCH, total)
-        await progress_msg.edit_text(
+        await safe_edit_text(progress_msg,
             f"📢 <b>កំពុងផ្សាយ...</b>\n"
             f"✅ {success} | ❌ {failed} | {done}/{total}",
             parse_mode="HTML",
@@ -860,7 +896,7 @@ async def cmd_broadcast(message: Message, command: CommandObject):
     )
     if blocked:
         summary += f"\n🚫 បាន block: {blocked} (បានដកចេញពីបញ្ជីសកម្ម)"
-    await progress_msg.edit_text(summary, parse_mode="HTML")
+    await safe_edit_text(progress_msg, summary, parse_mode="HTML")
     await send_log(
         f"📢 Broadcast done: {success}/{total} (blocked: {blocked})",
         bot=message.bot,
