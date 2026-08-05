@@ -2,15 +2,12 @@ import asyncio
 import logging
 import os
 import signal
-import socket
 import sys
 from typing import Optional
 
-import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeChat
 
@@ -140,18 +137,10 @@ async def main() -> None:
             # Fallback to default behavior
             logger.warning(f"Signal handler for {sig.name} not supported on this platform")
     
-    # Initialize bot with an aiohttp connector pinned to IPv4.
-    # Railway containers typically have IPv4-only routing, but api.telegram.org
-    # may resolve to AAAA records first — causing [Errno 101] Network is unreachable.
-    _connector = aiohttp.TCPConnector(
-        family=socket.AF_INET,
-        limit=10,
-        force_close=True,
-    )
+    # Initialize bot normally since Outbound IPv6 is now enabled on Railway
     _bot = Bot(
         token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        session=AiohttpSession(connector=_connector),
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
 
     # Register command menu (non-fatal if the network is temporarily down).
@@ -165,6 +154,7 @@ async def main() -> None:
         )
     except Exception as e:
         logger.warning(f"Could not register command menu: {e}")
+        
     # Admin-only commands, visible just in the admin's command menu.
     try:
         await _bot.set_my_commands(
