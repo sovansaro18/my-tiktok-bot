@@ -137,6 +137,13 @@ def feature_menu_keyboard() -> InlineKeyboardMarkup:
     """Main feature menu shown on /start."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            # ផ្នែកទី១៖ មុខងារដំណើរការ (ដាក់ឲ្យធំនៅខាងលើគេពេញមួយជួរ)
+            [
+                InlineKeyboardButton(
+                    text="🎬 ចុចទីនេះដើម្បី ទាញយកវីដេអូ 📥", callback_data="feat_formats"
+                ),
+            ],
+            # ផ្នែកទី២៖ ព័ត៌មានទូទៅ (បែងចែកជា ២ជួរៗនៅខាងក្រោម)
             [
                 InlineKeyboardButton(
                     text="📥 របៀបទាញយក", callback_data="feat_howto"
@@ -147,23 +154,18 @@ def feature_menu_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🎬 ទាញយកវីដេអូ", callback_data="feat_formats"
-                ),
-                InlineKeyboardButton(
                     text="📊 គណនីរបស់ខ្ញុំ", callback_data="feat_plan"
                 ),
-            ],
-            [
                 InlineKeyboardButton(
                     text="🚫 កំណត់ប្រើប្រាស់", callback_data="feat_limits"
-                ),
-                InlineKeyboardButton(
-                    text="📩 ជូនដំណឹង Admin", callback_data="feat_report"
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="❓ សំណួរញឹកញាប់", callback_data="feat_faq"
+                ),
+                InlineKeyboardButton(
+                    text="📩 ជូនដំណឹង Admin", callback_data="feat_report"
                 ),
             ],
         ]
@@ -330,8 +332,12 @@ async def cmd_start(message: Message, state: FSMContext):
 
     welcome = (
         f"👋 <b>សួស្តី {escape(message.from_user.full_name)}!</b>\n\n"
-        "👇 សូមជ្រើសរើសមុខងារដែលអ្នកចង់ប្រើប្រាស់!\n"
+        "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
         "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
+        "⚙️ <b>មុខងារដំណើរការ៖</b>\n"
+        "សូមចុចប៊ូតុង <b>ទាញយកវីដេអូ</b> ខាងក្រោម។\n\n"
+        "ℹ️ <b>ព័ត៌មានទូទៅ៖</b>\n"
+        "ស្វែងយល់បន្ថែមពីការប្រើប្រាស់តាមរយៈប៊ូតុងខាងក្រោម។"
     )
     await message.answer(
         welcome, parse_mode="HTML", reply_markup=feature_menu_keyboard()
@@ -362,7 +368,10 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             f"👋 <b>សួស្តី {escape(callback.from_user.full_name)}!</b>\n\n"
             "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
             "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
-            "<i>👆 សូមចុចប៊ូតុងខាងក្រោម ដើម្បីស្វែងយល់ដឹង!</i>"
+            "⚙️ <b>មុខងារដំណើរការ៖</b>\n"
+            "សូមចុចប៊ូតុង <b>ទាញយកវីដេអូ</b> ខាងក្រោម។\n\n"
+            "ℹ️ <b>ព័ត៌មានទូទៅ៖</b>\n"
+            "ស្វែងយល់បន្ថែមពីការប្រើប្រាស់តាមរយៈប៊ូតុងខាងក្រោម។"
         )
         try:
             await callback.message.edit_text(
