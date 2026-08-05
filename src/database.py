@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -9,6 +10,40 @@ import asyncpg
 from src.config import SUPABASE_URI
 
 logger = logging.getLogger(__name__)
+
+
+def _ipv4_dsn(uri: str) -> str:
+    """Rewrite a postgres DSN so the host is an IPv4 address.
+
+    Railway containers typically have IPv4-only routing, but DNS may return
+    AAAA records first — causing ``[Errno 101] Network is unreachable``.
+    Resolving the hostname to A records before connecting sidesteps that.
+    """
+    from urllib.parse import urlparse, urlunparse, quote_plus
+
+    parsed = urlparse(uri)
+    host = parsed.hostname
+    if not host:
+        return uri
+    try:
+        # Resolve to IPv4 only; fall back to original host on failure.
+        resolved = socket.getaddrinfo(host, None, socket.AF_INET)
+        if not resolved:
+            return uri
+        ipv4 = resolved[0][4][0]
+    except (socket.gaierror, OSError):
+        return uri
+
+    # Rebuild netloc preserving user:pass@ and port.
+    netloc = ipv4
+    if parsed.username:
+        creds = quote_plus(parsed.username)
+        if parsed.password:
+            creds += ":" + quote_plus(parsed.password)
+        netloc = f"{creds}@{ipv4}"
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
 
 
 def _default_user(user_id: int) -> Dict[str, Any]:
@@ -66,12 +101,14 @@ class SupabaseDatabase(BaseDatabase):
 
     async def _ensure_pool(self) -> asyncpg.Pool:
         if self._pool is None:
+            dsn = _ipv4_dsn(self._uri)
             try:
                 self._pool = await asyncpg.create_pool(
-                    dsn=self._uri,
+                    dsn=dsn,
                     min_size=1,
                     max_size=5,
                     command_timeout=30,
+                    server_settings={"application_name": "telegram-bot"},
                 )
                 # Verify connectivity
                 async with self._pool.acquire() as conn:
