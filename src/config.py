@@ -6,7 +6,7 @@ load_dotenv()
 
 # ====== Load Environment Variables ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-MONGO_URI = os.getenv("MONGO_URI")
+SUPABASE_URI = os.getenv("SUPABASE_URI")
 ADMIN_ID = os.getenv("ADMIN_ID")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 REPORT_CHANNEL_ID_STR = os.getenv("REPORT_CHANNEL_ID", "-1003569125986")
@@ -50,14 +50,6 @@ def validate_bot_token(token: str) -> bool:
     return bool(re.match(pattern, token))
 
 
-def validate_mongo_uri(uri: str) -> bool:
-    """Validate MongoDB URI format (basic check)."""
-    if not uri:
-        return False
-    valid_prefixes = ['mongodb://', 'mongodb+srv://']
-    return any(uri.startswith(prefix) for prefix in valid_prefixes)
-
-
 # ====== Validate Required Fields ======
 if not all([BOT_TOKEN, ADMIN_ID]):
     raise ValueError(
@@ -70,13 +62,6 @@ if not validate_bot_token(BOT_TOKEN):
     raise ValueError(
         "❌ Invalid BOT_TOKEN format!\n"
         "Expected format: 123456789:ABCdefGHI-jklMNOpqr_stuvWXYZ"
-    )
-
-# ====== Validate MONGO_URI Format (Optional) ======
-if MONGO_URI and not validate_mongo_uri(MONGO_URI):
-    raise ValueError(
-        "❌ Invalid MONGO_URI format!\n"
-        "Expected: mongodb:// or mongodb+srv:// URI"
     )
 
 # ====== Parse ADMIN_ID ======

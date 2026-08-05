@@ -2,7 +2,7 @@
   "name": "project",
   "version": "1.0.0",
   "private": true,
-  "description": "Telegram video downloader bot (Python)",
+  "description": "Telegram video downloader bot (Python, Supabase)",
   "scripts": {
     "build": "echo 'Python project - build handled by Dockerfile'",
     "start": "python main.py"
