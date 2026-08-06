@@ -54,6 +54,7 @@ class ConvertState(StatesGroup):
     waiting_for_video = State()
 
 class TTSState(StatesGroup):
+    waiting_for_voice = State()
     waiting_for_text = State()
 
 
@@ -172,6 +173,18 @@ def general_info_keyboard() -> InlineKeyboardMarkup:
         ]
     )
 
+def tts_voice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👨 សំឡេងប្រុស", callback_data="tts_voice_male"),
+                InlineKeyboardButton(text="👩 សំឡេងស្រី", callback_data="tts_voice_female"),
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back"),
+            ]
+        ]
+    )
 
 FEATURE_PANELS = {
     "feat_howto": (
@@ -217,7 +230,6 @@ FEATURE_PANELS = {
         "A: ផ្ញើ Link ត្រឹមត្រូវពីវេទិកាគាំទ្រប៉ុណ្ណោះ"
     ),
 }
-
 
 # ─────────────────────────────────────────────
 # Helper: Format Selection Keyboard
@@ -326,7 +338,6 @@ async def cmd_start(message: Message, state: FSMContext):
 async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
-    # ពេលចុចចូលប៊ូតុង "ព័ត៌មានទូទៅ"
     if callback.data == "feat_general_info":
         await safe_edit_text(callback.message,
             "ℹ️ <b>ព័ត៌មានទូទៅ</b>\n\n"
@@ -336,7 +347,6 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # ពេលចុចចូល "ជូនដំណឹង Admin" ពីក្នុងព័ត៌មានទូទៅ
     if callback.data == "feat_report":
         await state.set_state(ReportState.waiting_for_report)
         await safe_edit_text(callback.message,
@@ -363,19 +373,15 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         return
 
     if callback.data == "feat_tts":
-        await state.set_state(TTSState.waiting_for_text)
+        await state.set_state(TTSState.waiting_for_voice)
         await safe_edit_text(callback.message,
-            "🗣️ <b>បំប្លែងអត្ថបទទៅជាសំឡេង (TTS)</b>\n\n"
-            "សូមវាយ ឬ Copy អត្ថបទជា <b>ភាសាខ្មែរ ឬអង់គ្លេស</b> បញ្ចូលមកទីនេះ។\n\n"
-            "<i>ចំណាំ៖ សូមបញ្ញូលអត្ថបទក្រោម ១០០០ តួអក្សរ ដើម្បីការបំប្លែងបានរហ័ស។</i>",
+            "🗣️ <b>អានអត្ថបទ (Text-to-Speech)</b>\n\n"
+            "សូមជ្រើសរើសប្រភេទសំឡេងដែលអ្នកចង់បាន:",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")]]
-            )
+            reply_markup=tts_voice_keyboard()
         )
         return
 
-    # ប៊ូតុងត្រឡប់មកកាន់ផ្ទាំង Main Menu ដើមវិញ
     if callback.data == "feat_back":
         await state.clear()
         welcome = (
@@ -409,7 +415,6 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
     if panel_text is None:
         return
 
-    # ផ្ទាំងបង្ហាញព័ត៌មានលម្អិត ហើយមានប៊ូតុងត្រឡប់ទៅ General Info វិញ
     try:
         await callback.message.edit_text(
             panel_text,
@@ -491,12 +496,35 @@ async def handle_convert_invalid_input(message: Message):
 # Text-to-Speech (TTS) Handler
 # ─────────────────────────────────────────────
 
+@router.callback_query(F.data.startswith("tts_voice_"), TTSState.waiting_for_voice)
+async def handle_tts_voice_selection(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    voice_gender = "male" if callback.data == "tts_voice_male" else "female"
+    await state.update_data(voice_gender=voice_gender)
+    await state.set_state(TTSState.waiting_for_text)
+    
+    voice_label = "👨 ប្រុស" if voice_gender == "male" else "👩 ស្រី"
+    await safe_edit_text(callback.message,
+        f"✅ បានជ្រើសរើសសំឡេង: <b>{voice_label}</b>\n\n"
+        "🗣️ សូមវាយ ឬ Copy អត្ថបទជា <b>ភាសាខ្មែរ ឬអង់គ្លេស</b> បញ្ចូលមកទីនេះ។\n\n"
+        "<i>ចំណាំ៖ សូមបញ្ចូលអត្ថបទក្រោម 3000 តួអក្សរ។</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(
+                text="⬅️ បោះបង់", callback_data="feat_back"
+            )]]
+        )
+    )
+
 @router.message(TTSState.waiting_for_text, F.text)
 async def handle_tts_text(message: Message, state: FSMContext):
     text = message.text.strip()
     
-    if len(text) > 1000:
-        await message.answer("❌ <b>អត្ថបទវែងពេក!</b>\n\nសូមផ្ញើអត្ថបទដែលមានប្រវែងតិចជាង ១០០០ តួអក្សរ។", parse_mode="HTML")
+    data = await state.get_data()
+    voice_gender = data.get("voice_gender", "female")  # fallback safety
+    
+    if len(text) > 3000:
+        await message.answer("❌ <b>អត្ថបទវែងពេក!</b>\n\nសូមផ្ញើអត្ថបទដែលមានប្រវែងតិចជាង ៣០០០ តួអក្សរ។", parse_mode="HTML")
         return
 
     prog_msg = await message.answer("⏳ <b>កំពុងអានអត្ថបទរបស់អ្នក...</b>\n<i>សូមរង់ចាំបន្តិច...</i>", parse_mode="HTML")
