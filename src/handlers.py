@@ -305,9 +305,9 @@ async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
         logger.error(f"❌ Unexpected error deleting message {message_id}: {e}")
         return False
 
-async def safe_edit_text(message: Message, new_text: str, parse_mode: str = "HTML") -> Message:
+async def safe_edit_text(message: Message, new_text: str, parse_mode: str = "HTML", **kwargs) -> Message:
     try:
-        return await message.edit_text(new_text, parse_mode=parse_mode)
+        return await message.edit_text(new_text, parse_mode=parse_mode, **kwargs)
     except TelegramBadRequest as e:
         logger.warning(f"⚠️ safe_edit_text ignored TelegramBadRequest: {e}")
         return message 
