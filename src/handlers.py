@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from html import escape
 from datetime import datetime, timezone
 
+from gtts import gTTS
+
 from aiogram import Router, F, Bot
 from aiogram.types import (
     Message,
@@ -51,13 +53,15 @@ class ReportState(StatesGroup):
 class ConvertState(StatesGroup):
     waiting_for_video = State()
 
+class TTSState(StatesGroup):
+    waiting_for_text = State()
+
 
 # ─────────────────────────────────────────────
 # Helper: Friendly Error Messages
 # ─────────────────────────────────────────────
 
 def friendly_download_error(url: str, err: str) -> str:
-    """Map raw downloader errors to user-friendly Khmer messages."""
     u = (url or "").lower()
     e = (err or "").lower()
 
@@ -136,10 +140,9 @@ def friendly_download_error(url: str, err: str) -> str:
 # ─────────────────────────────────────────────
 
 def feature_menu_keyboard() -> InlineKeyboardMarkup:
-    """Main feature menu shown on /start."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            # ផ្នែកទី១៖ មុខងារដំណើរការ
+            # ផ្នែកទី១៖ មុខងារដំណើរការ (៣ មុខងារ)
             [
                 InlineKeyboardButton(
                     text="🎬 ទាញយកវីដេអូ 📥", callback_data="feat_formats"
@@ -148,6 +151,9 @@ def feature_menu_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="🔄 បំលែង Video ទៅ MP3", callback_data="feat_convert"
+                ),
+                InlineKeyboardButton(
+                    text="🗣️ អានអត្ថបទ (TTS)", callback_data="feat_tts"
                 ),
             ],
             # ផ្នែកទី២៖ ព័ត៌មានទូទៅ
@@ -249,23 +255,16 @@ def download_type_keyboard() -> InlineKeyboardMarkup:
         ]
     )
 
-
 def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
     if platform == "tiktok":
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(
-                        text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"
-                    ),
-                    InlineKeyboardButton(
-                        text="🎵 MP3", callback_data="fmt_audio"
-                    ),
+                    InlineKeyboardButton(text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"),
+                    InlineKeyboardButton(text="🎵 MP3", callback_data="fmt_audio"),
                 ],
                 [
-                    InlineKeyboardButton(
-                        text="🖼️ រូបភាព (Photo)", callback_data="fmt_photo"
-                    ),
+                    InlineKeyboardButton(text="🖼️ រូបភាព (Photo)", callback_data="fmt_photo"),
                 ],
             ]
         )
@@ -273,12 +272,8 @@ def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(
-                        text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"
-                    ),
-                    InlineKeyboardButton(
-                        text="🎵 អូឌីយ៉ូ (MP3)", callback_data="fmt_audio"
-                    ),
+                    InlineKeyboardButton(text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"),
+                    InlineKeyboardButton(text="🎵 អូឌីយ៉ូ (MP3)", callback_data="fmt_audio"),
                 ]
             ]
         )
@@ -299,7 +294,6 @@ async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
         if "message can't be deleted" in err:
             logger.warning(f"⚠️ Cannot delete message {message_id}")
             return False
-        logger.error(f"❌ Error deleting message {message_id}: {e}")
         return False
     except Exception as e:
         logger.error(f"❌ Unexpected error deleting message {message_id}: {e}")
@@ -314,6 +308,7 @@ async def safe_edit_text(message: Message, new_text: str, parse_mode: str = "HTM
     except Exception as e:
         logger.error(f"❌ safe_edit_text encountered unexpected error: {e}")
         return message
+
 
 # ─────────────────────────────────────────────
 # Commands: /start
@@ -377,6 +372,20 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    # Callback សម្រាប់មុខងារ បំប្លែងអត្ថបទទៅជាសំឡេង
+    if callback.data == "feat_tts":
+        await state.set_state(TTSState.waiting_for_text)
+        await safe_edit_text(callback.message,
+            "🗣️ <b>បំប្លែងអត្ថបទទៅជាសំឡេង (TTS)</b>\n\n"
+            "សូមវាយ ឬ Copy អត្ថបទជា <b>ភាសាខ្មែរ ឬអង់គ្លេស</b> បញ្ចូលមកទីនេះ។\n\n"
+            "<i>ចំណាំ៖ សូមបញ្ញូលអត្ថបទក្រោម ១០០០ តួអក្សរ ដើម្បីការបំប្លែងបានរហ័ស។</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")]]
+            )
+        )
+        return
+
     if callback.data == "feat_back":
         await state.clear()
         welcome = (
@@ -392,8 +401,8 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_text(
                 welcome, parse_mode="HTML", reply_markup=feature_menu_keyboard()
             )
-        except Exception as e:
-            logger.warning(f"Ignore edit error on back: {e}")
+        except Exception:
+            pass
         return
 
     if callback.data == "feat_formats":
@@ -435,12 +444,10 @@ async def handle_local_video(message: Message, state: FSMContext):
     """Handles uploaded video file to convert to MP3"""
     video = message.video or message.document
     
-    # Check mime type if it's a document
     if message.document and not message.document.mime_type.startswith('video/'):
         await message.answer("⚠️ សូមផ្ញើជាប្រភេទឯកសារ <b>វីដេអូ (Video)</b>។", parse_mode="HTML")
         return
 
-    # Check file size (Telegram bot API max limit is 20MB for download)
     if video.file_size > 20 * 1024 * 1024:
         await message.answer("❌ <b>វីដេអូធំពេកហើយ!</b>\n\nទំហំអតិបរមាដែលអនុញ្ញាតគឺ <b>20MB</b>។ សូមផ្ញើវីដេអូខ្លីជាងនេះ។", parse_mode="HTML")
         return
@@ -454,11 +461,9 @@ async def handle_local_video(message: Message, state: FSMContext):
     output_path = f"temp_out_{file_id}.mp3"
 
     try:
-        # Download the file to server
         await message.bot.download_file(file.file_path, input_path)
         await safe_edit_text(prog_msg, "⏳ <b>កំពុងបំលែងទៅជា MP3...</b>\n<i>សូមរង់ចាំបន្តិច...</i>", parse_mode="HTML")
 
-        # Run FFmpeg to extract audio non-blockingly
         process = await asyncio.create_subprocess_exec(
             'ffmpeg', '-i', input_path, '-q:a', '0', '-map', 'a', output_path, '-y',
             stdout=asyncio.subprocess.PIPE,
@@ -473,7 +478,6 @@ async def handle_local_video(message: Message, state: FSMContext):
 
         await safe_edit_text(prog_msg, "📤 <b>កំពុងបញ្ជូនសំឡេងទៅកាន់អ្នក...</b>", parse_mode="HTML")
 
-        # Send Audio back
         audio_file = FSInputFile(output_path)
         await message.answer_audio(audio=audio_file, title="Converted Audio", performer="@v_videodownloader_bot")
 
@@ -481,7 +485,6 @@ async def handle_local_video(message: Message, state: FSMContext):
         logger.error(f"Error in video conversion: {e}", exc_info=True)
         await safe_edit_text(prog_msg, "❌ <b>មានបញ្ហាប្រព័ន្ធ។</b> សូមសាកល្បងម្ដងទៀតនៅពេលក្រោយ។", parse_mode="HTML")
     finally:
-        # Cleanup files and reset state
         try:
             await prog_msg.delete()
         except:
@@ -493,8 +496,59 @@ async def handle_local_video(message: Message, state: FSMContext):
 
 @router.message(ConvertState.waiting_for_video)
 async def handle_convert_invalid_input(message: Message):
-    """Handles if user sends text or link instead of a video file"""
     await message.answer("⚠️ សូមផ្ញើជា <b>ឯកសារវីដេអូ (Video File)</b> ដែលមានក្នុងទូរស័ព្ទរបស់អ្នក មិនមែនជាអត្ថបទ ឬ Link ទេ។", parse_mode="HTML")
+
+
+# ─────────────────────────────────────────────
+# Text-to-Speech (TTS) Handler
+# ─────────────────────────────────────────────
+
+@router.message(TTSState.waiting_for_text, F.text)
+async def handle_tts_text(message: Message, state: FSMContext):
+    """Handles text input and converts it to speech using Google TTS."""
+    text = message.text.strip()
+    
+    if len(text) > 1000:
+        await message.answer("❌ <b>អត្ថបទវែងពេក!</b>\n\nសូមផ្ញើអត្ថបទដែលមានប្រវែងតិចជាង ១០០០ តួអក្សរ។", parse_mode="HTML")
+        return
+
+    prog_msg = await message.answer("⏳ <b>កំពុងអានអត្ថបទរបស់អ្នក...</b>\n<i>សូមរង់ចាំបន្តិច...</i>", parse_mode="HTML")
+
+    file_path = f"tts_{message.from_user.id}_{int(datetime.now().timestamp())}.mp3"
+
+    try:
+        loop = asyncio.get_event_loop()
+        
+        def create_tts():
+            tts = gTTS(text=text, lang='km')
+            tts.save(file_path)
+
+        await loop.run_in_executor(None, create_tts)
+
+        await safe_edit_text(prog_msg, "📤 <b>កំពុងបញ្ជូនសំឡេងទៅកាន់អ្នក...</b>", parse_mode="HTML")
+
+        audio_file = FSInputFile(file_path)
+        await message.answer_voice(
+            voice=audio_file, 
+            caption="🗣️ <b>អានរួចរាល់!</b>",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in TTS conversion: {e}", exc_info=True)
+        await safe_edit_text(prog_msg, "❌ <b>មានបញ្ហាក្នុងការបំប្លែងអត្ថបទ។</b> សូមសាកល្បងម្ដងទៀតនៅពេលក្រោយ។", parse_mode="HTML")
+    finally:
+        try:
+            await prog_msg.delete()
+        except:
+            pass
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        await state.clear()
+
+@router.message(TTSState.waiting_for_text)
+async def handle_tts_invalid_input(message: Message):
+    await message.answer("⚠️ សូមផ្ញើជា <b>អត្ថបទ (Text)</b> មិនមែនជារូបភាព ឬវីដេអូទេ។", parse_mode="HTML")
 
 
 # ─────────────────────────────────────────────
@@ -581,9 +635,8 @@ async def handle_report_non_text(message: Message):
 
 @router.message(F.text.regexp(r"(https?://[^\s]+)"))
 async def handle_link(message: Message, state: FSMContext):
-    """Validate URL and show format selection buttons."""
     user_id = message.from_user.id
-    await db.get_user(user_id)  # Register user if new
+    await db.get_user(user_id)  
 
     raw_url = message.text.strip()
     try:
@@ -599,7 +652,6 @@ async def handle_link(message: Message, state: FSMContext):
     stored_data = await state.get_data()
     selected_type = stored_data.get("download_type")
 
-    # If user selected a default type in /start menu before sending the URL
     if (
         current_state == DownloadState.waiting_for_url.state
         and selected_type in ("audio", "video")
@@ -611,14 +663,13 @@ async def handle_link(message: Message, state: FSMContext):
         )
         await state.set_state(DownloadState.waiting_for_format)
         
-        # Send a new message instead of modifying the user's message directly
         progress_msg = await message.answer(
             f"⏳ <b>កំពុងដំណើរការ...</b>\n",
             parse_mode="HTML",
         )
         
         download_context = SimpleNamespace(
-            message=progress_msg, # Pass the bot's newly created message as context
+            message=progress_msg,
             data=f"fmt_{selected_type}",
             from_user=message.from_user,
             bot=message.bot,
@@ -648,9 +699,7 @@ async def handle_link(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("fmt_"))
 async def process_download_callback_from_query(callback: CallbackQuery, state: FSMContext):
-    """Wrapper to handle actual callback queries (button clicks)"""
     await callback.answer()
-    
     download_context = SimpleNamespace(
         message=callback.message,
         data=callback.data,
@@ -661,7 +710,6 @@ async def process_download_callback_from_query(callback: CallbackQuery, state: F
 
 
 async def process_download_callback(callback: SimpleNamespace, state: FSMContext):
-    """Core download logic handling both direct links and button clicks."""
     data = await state.get_data()
     url = data.get("url")
     url_message_id = data.get("url_message_id")
