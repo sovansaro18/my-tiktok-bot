@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from html import escape
 from datetime import datetime, timezone
 
-from gtts import gTTS
+from src.tts_engine import generate_speech
 
 from aiogram import Router, F, Bot
 from aiogram.types import (
@@ -104,7 +104,7 @@ def friendly_download_error(url: str, err: str) -> str:
             "នេះជាវីដេអូ <b>Private</b> (ឬ Friends-only/Group-private) "
             "ហើយ <b>ខុសគោលការណ៍របស់ Bot</b> "
             "ដូច្នេះ Bot <b>មិនអាចទាញយកបាន</b>。\n\n"
-            f"✅ សូមផ្ញើ Link វីដេអូដែលជា <b>Public</b> ពី {plat} មកវិញ។"
+            f"✅ សូមផ្ញើ Link វីដេអូដែលជា <b>Public</b> ពី {plat} មកវិញ。"
         )
     if any(m in e for m in login_markers):
         return (
@@ -532,13 +532,16 @@ async def handle_tts_text(message: Message, state: FSMContext):
     file_path = f"tts_{message.from_user.id}_{int(datetime.now().timestamp())}.mp3"
 
     try:
-        loop = asyncio.get_event_loop()
+        # Native async call ទៅកាន់ edge-tts engine របស់យើង
+        success = await generate_speech(text, voice_gender, file_path)
         
-        def create_tts():
-            tts = gTTS(text=text, lang='km')
-            tts.save(file_path)
-
-        await loop.run_in_executor(None, create_tts)
+        if not success:
+            await safe_edit_text(prog_msg,
+                "❌ <b>មានបញ្ហាក្នុងការបំប្លែងអត្ថបទទៅជាសំឡេង។</b>\n\n"
+                "សូមព្យាយាមម្តងទៀត ឬសាកល្បងអត្ថបទខ្លីជាងនេះ。",
+                parse_mode="HTML",
+            )
+            return
 
         await safe_edit_text(prog_msg, "📤 <b>កំពុងបញ្ជូនសំឡេងទៅកាន់អ្នក...</b>", parse_mode="HTML")
 
