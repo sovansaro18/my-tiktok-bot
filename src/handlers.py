@@ -136,50 +136,38 @@ def friendly_download_error(url: str, err: str) -> str:
 
 
 # ─────────────────────────────────────────────
-# Helper: Feature Menu Keyboard
+# Helper: Keyboards
 # ─────────────────────────────────────────────
 
 def feature_menu_keyboard() -> InlineKeyboardMarkup:
+    """Main Menu Keyboard (Only Core Functions + General Info Button)"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            # ផ្នែកទី១៖ មុខងារដំណើរការ (៣ មុខងារ)
+            [InlineKeyboardButton(text="🎬 ទាញយកវីដេអូ 📥", callback_data="feat_formats")],
+            [InlineKeyboardButton(text="🔄 បំលែង Video ទៅ MP3", callback_data="feat_convert")],
+            [InlineKeyboardButton(text="🗣️ អានអត្ថបទ (TTS)", callback_data="feat_tts")],
+            [InlineKeyboardButton(text="ℹ️ ព័ត៌មានទូទៅ", callback_data="feat_general_info")],
+        ]
+    )
+
+def general_info_keyboard() -> InlineKeyboardMarkup:
+    """Sub-Menu Keyboard (General Information Links)"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="🎬 ទាញយកវីដេអូ 📥", callback_data="feat_formats"
-                ),
+                InlineKeyboardButton(text="📥 របៀបទាញយក", callback_data="feat_howto"),
+                InlineKeyboardButton(text="🌐 វេទិកាគាំទ្រ", callback_data="feat_platforms"),
             ],
             [
-                InlineKeyboardButton(
-                    text="🔄 បំលែង Video ទៅ MP3", callback_data="feat_convert"
-                ),
-                InlineKeyboardButton(
-                    text="🗣️ អានអត្ថបទ (TTS)", callback_data="feat_tts"
-                ),
-            ],
-            # ផ្នែកទី២៖ ព័ត៌មានទូទៅ
-            [
-                InlineKeyboardButton(
-                    text="📥 របៀបទាញយក", callback_data="feat_howto"
-                ),
-                InlineKeyboardButton(
-                    text="🌐 វេទិកាគាំទ្រ", callback_data="feat_platforms"
-                ),
+                InlineKeyboardButton(text="📊 គណនីរបស់ខ្ញុំ", callback_data="feat_plan"),
+                InlineKeyboardButton(text="🚫 កំណត់ប្រើប្រាស់", callback_data="feat_limits"),
             ],
             [
-                InlineKeyboardButton(
-                    text="📊 គណនីរបស់ខ្ញុំ", callback_data="feat_plan"
-                ),
-                InlineKeyboardButton(
-                    text="🚫 កំណត់ប្រើប្រាស់", callback_data="feat_limits"
-                ),
+                InlineKeyboardButton(text="❓ សំណួរញឹកញាប់", callback_data="feat_faq"),
+                InlineKeyboardButton(text="📩 ជូនដំណឹង Admin", callback_data="feat_report"),
             ],
             [
-                InlineKeyboardButton(
-                    text="❓ សំណួរញឹកញាប់", callback_data="feat_faq"
-                ),
-                InlineKeyboardButton(
-                    text="📩 ជូនដំណឹង Admin", callback_data="feat_report"
-                ),
+                InlineKeyboardButton(text="⬅️ ត្រឡប់ក្រោយ", callback_data="feat_back"),
             ],
         ]
     )
@@ -202,12 +190,6 @@ FEATURE_PANELS = {
         "✅ Instagram\n"
         "✅ Pinterest\n\n"
         "<i>ផ្ញើ Link ពីវេទិកាខាងលើមក Bot បានភ្លាម!</i>"
-    ),
-    "feat_formats": (
-        "🎬 <b>ទាញយកវីដេអូ</b>\n\n"
-        "🎬 <b>Video (MP4)</b> — ទាញយកជាវីដេអូ\n"
-        "🎵 <b>Audio (MP3)</b> — ទាញយកជាសំឡេង\n\n"
-        "<i>សូមជ្រើសរើសប្រភេទដែលអ្នកចង់ទាញយក។</i>"
     ),
     "feat_plan": (
         "📊 <b>គណនីរបស់ខ្ញុំ</b>\n\n"
@@ -329,12 +311,7 @@ async def cmd_start(message: Message, state: FSMContext):
 
     welcome = (
         f"👋 <b>សួស្តី {escape(message.from_user.full_name)}!</b>\n\n"
-        "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
-        "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
-        "⚙️ <b>មុខងារដំណើរការ៖</b>\n"
-        "សូមជ្រើសរើសមុខងារណាមួយនៅខាងក្រោម។\n\n"
-        "ℹ️ <b>ព័ត៌មានទូទៅ៖</b>\n"
-        "ស្វែងយល់បន្ថែមពីការប្រើប្រាស់តាមរយៈប៊ូតុងខាងក្រោម។"
+        "⚙️ <b>សូមជ្រើសរើសមុខងារនៅខាងក្រោម៖</b>"
     )
     await message.answer(
         welcome, parse_mode="HTML", reply_markup=feature_menu_keyboard()
@@ -349,16 +326,29 @@ async def cmd_start(message: Message, state: FSMContext):
 async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
+    # ពេលចុចចូលប៊ូតុង "ព័ត៌មានទូទៅ"
+    if callback.data == "feat_general_info":
+        await safe_edit_text(callback.message,
+            "ℹ️ <b>ព័ត៌មានទូទៅ</b>\n\n"
+            "សូមជ្រើសរើសព័ត៌មានដែលអ្នកចង់ស្វែងយល់ខាងក្រោម៖",
+            parse_mode="HTML",
+            reply_markup=general_info_keyboard()
+        )
+        return
+
+    # ពេលចុចចូល "ជូនដំណឹង Admin" ពីក្នុងព័ត៌មានទូទៅ
     if callback.data == "feat_report":
         await state.set_state(ReportState.waiting_for_report)
         await safe_edit_text(callback.message,
             "📩 <b>សូមវាយសារជូនដំណឹង!</b>\n\n"
             "សរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ។",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_general_info")]]
+            )
         )
         return
 
-    # Callback សម្រាប់មុខងារ បំលែងវីដេអូ ទៅ MP3
     if callback.data == "feat_convert":
         await state.set_state(ConvertState.waiting_for_video)
         await safe_edit_text(callback.message,
@@ -372,7 +362,6 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Callback សម្រាប់មុខងារ បំប្លែងអត្ថបទទៅជាសំឡេង
     if callback.data == "feat_tts":
         await state.set_state(TTSState.waiting_for_text)
         await safe_edit_text(callback.message,
@@ -386,16 +375,12 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    # ប៊ូតុងត្រឡប់មកកាន់ផ្ទាំង Main Menu ដើមវិញ
     if callback.data == "feat_back":
         await state.clear()
         welcome = (
             f"👋 <b>សួស្តី {escape(callback.from_user.full_name)}!</b>\n\n"
-            "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
-            "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
-            "⚙️ <b>មុខងារដំណើរការ៖</b>\n"
-            "សូមជ្រើសរើសមុខងារណាមួយនៅខាងក្រោម។\n\n"
-            "ℹ️ <b>ព័ត៌មានទូទៅ៖</b>\n"
-            "ស្វែងយល់បន្ថែមពីការប្រើប្រាស់តាមរយៈប៊ូតុងខាងក្រោម។"
+            "⚙️ <b>សូមជ្រើសរើសមុខងារនៅខាងក្រោម៖</b>"
         )
         try:
             await callback.message.edit_text(
@@ -411,7 +396,10 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_text(
                 "🎬 <b>ទាញយកវីដេអូ</b>\n\n"
                 "សូមផ្ញើ Link Video ដើម្បីធ្វើការទាញយក:",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")]]
+                )
             )
         except Exception:
             pass
@@ -421,13 +409,14 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
     if panel_text is None:
         return
 
+    # ផ្ទាំងបង្ហាញព័ត៌មានលម្អិត ហើយមានប៊ូតុងត្រឡប់ទៅ General Info វិញ
     try:
         await callback.message.edit_text(
             panel_text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_back")]
+                    [InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_general_info")]
                 ]
             ),
         )
@@ -441,7 +430,6 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
 
 @router.message(ConvertState.waiting_for_video, F.video | F.document)
 async def handle_local_video(message: Message, state: FSMContext):
-    """Handles uploaded video file to convert to MP3"""
     video = message.video or message.document
     
     if message.document and not message.document.mime_type.startswith('video/'):
@@ -505,7 +493,6 @@ async def handle_convert_invalid_input(message: Message):
 
 @router.message(TTSState.waiting_for_text, F.text)
 async def handle_tts_text(message: Message, state: FSMContext):
-    """Handles text input and converts it to speech using Google TTS."""
     text = message.text.strip()
     
     if len(text) > 1000:
@@ -552,7 +539,7 @@ async def handle_tts_invalid_input(message: Message):
 
 
 # ─────────────────────────────────────────────
-# Commands: /plan
+# Commands: /plan & /report
 # ─────────────────────────────────────────────
 
 @router.message(Command("plan"))
@@ -569,11 +556,6 @@ async def cmd_plan(message: Message, state: FSMContext):
     )
     await message.answer(text, parse_mode="HTML")
 
-
-# ─────────────────────────────────────────────
-# Commands: /report
-# ─────────────────────────────────────────────
-
 @router.message(Command("report"))
 async def cmd_report(message: Message, state: FSMContext):
     await state.set_state(ReportState.waiting_for_report)
@@ -582,7 +564,6 @@ async def cmd_report(message: Message, state: FSMContext):
         "សរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ。",
         parse_mode="HTML",
     )
-
 
 @router.message(ReportState.waiting_for_report, F.text)
 async def handle_report(message: Message, state: FSMContext):
@@ -619,7 +600,6 @@ async def handle_report(message: Message, state: FSMContext):
         await message.answer("❌ មិនអាចផ្ញើ report បានទេ។ សូមព្យាយាមម្តងទៀត。")
     finally:
         await state.clear()
-
 
 @router.message(ReportState.waiting_for_report)
 async def handle_report_non_text(message: Message):
