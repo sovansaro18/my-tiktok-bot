@@ -45,9 +45,11 @@ class DownloadState(StatesGroup):
     waiting_for_format = State()
     waiting_for_url = State()
 
-
 class ReportState(StatesGroup):
     waiting_for_report = State()
+
+class ConvertState(StatesGroup):
+    waiting_for_video = State()
 
 
 # ─────────────────────────────────────────────
@@ -137,13 +139,18 @@ def feature_menu_keyboard() -> InlineKeyboardMarkup:
     """Main feature menu shown on /start."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            # ផ្នែកទី១៖ មុខងារដំណើរការ (ដាក់ឲ្យធំនៅខាងលើគេពេញមួយជួរ)
+            # ផ្នែកទី១៖ មុខងារដំណើរការ
             [
                 InlineKeyboardButton(
-                    text="🎬 ចុចទីនេះដើម្បី ទាញយកវីដេអូ 📥", callback_data="feat_formats"
+                    text="🎬 ទាញយកវីដេអូ 📥", callback_data="feat_formats"
                 ),
             ],
-            # ផ្នែកទី២៖ ព័ត៌មានទូទៅ (បែងចែកជា ២ជួរៗនៅខាងក្រោម)
+            [
+                InlineKeyboardButton(
+                    text="🔄 បំលែង Video ទៅ MP3", callback_data="feat_convert"
+                ),
+            ],
+            # ផ្នែកទី២៖ ព័ត៌មានទូទៅ
             [
                 InlineKeyboardButton(
                     text="📥 របៀបទាញយក", callback_data="feat_howto"
@@ -208,7 +215,8 @@ FEATURE_PANELS = {
         "❌ មិនគាំទ្រវីដេអូ Private\n"
         "❌ មិនគាំទ្រវីដេអូ Copyright\n"
         "❌ មិនគាំទ្រវីដេអូ Age-restricted\n"
-        "⚠️ ទំហំអតិបរមា 49MB\n\n"
+        "⚠️ ទំហំអតិបរមា 49MB (សម្រាប់ទាញយក)\n"
+        "⚠️ ទំហំអតិបរមា 20MB (សម្រាប់បញ្ជូនវីដេអូបំលែង)\n\n"
         "<i>សូមផ្ញើ Link ដែលជា Public ប៉ុណ្ណោះ!</i>"
     ),
     "feat_faq": (
@@ -243,10 +251,6 @@ def download_type_keyboard() -> InlineKeyboardMarkup:
 
 
 def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
-    """
-    TikTok → 3 buttons (Video / MP3 / Photo)
-    Other platforms → 2 buttons (Video / MP3)
-    """
     if platform == "tiktok":
         return InlineKeyboardMarkup(
             inline_keyboard=[
@@ -285,7 +289,6 @@ def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
 # ─────────────────────────────────────────────
 
 async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
-    """Delete a Telegram message without raising exceptions."""
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         return True
@@ -303,12 +306,11 @@ async def safe_delete_message(bot: Bot, chat_id: int, message_id: int) -> bool:
         return False
 
 async def safe_edit_text(message: Message, new_text: str, parse_mode: str = "HTML") -> Message:
-    """Safely edit a message to avoid TelegramBadRequest (e.g. message can't be edited or identical text)."""
     try:
         return await message.edit_text(new_text, parse_mode=parse_mode)
     except TelegramBadRequest as e:
         logger.warning(f"⚠️ safe_edit_text ignored TelegramBadRequest: {e}")
-        return message # Just return the original message if edit fails
+        return message 
     except Exception as e:
         logger.error(f"❌ safe_edit_text encountered unexpected error: {e}")
         return message
@@ -335,7 +337,7 @@ async def cmd_start(message: Message, state: FSMContext):
         "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
         "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
         "⚙️ <b>មុខងារដំណើរការ៖</b>\n"
-        "សូមចុចប៊ូតុង <b>ទាញយកវីដេអូ</b> ខាងក្រោម។\n\n"
+        "សូមជ្រើសរើសមុខងារណាមួយនៅខាងក្រោម។\n\n"
         "ℹ️ <b>ព័ត៌មានទូទៅ៖</b>\n"
         "ស្វែងយល់បន្ថែមពីការប្រើប្រាស់តាមរយៈប៊ូតុងខាងក្រោម។"
     )
@@ -350,7 +352,6 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("feat_"))
 async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
-    """Handle feature menu button presses."""
     await callback.answer()
 
     if callback.data == "feat_report":
@@ -362,6 +363,20 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    # Callback សម្រាប់មុខងារ បំលែងវីដេអូ ទៅ MP3
+    if callback.data == "feat_convert":
+        await state.set_state(ConvertState.waiting_for_video)
+        await safe_edit_text(callback.message,
+            "🔄 <b>បំលែង Video ទៅជា MP3</b>\n\n"
+            "សូមផ្ញើ <b>ឯកសារវីដេអូ</b> របស់អ្នកចូលមកក្នុង Chat នេះ (ទំហំអតិបរមា 20MB)។\n\n"
+            "<i>ចំណាំ៖ សូមផ្ញើជាវីដេអូផ្ទាល់ មិនមែនជា Link ទេ។</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")]]
+            )
+        )
+        return
+
     if callback.data == "feat_back":
         await state.clear()
         welcome = (
@@ -369,7 +384,7 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             "🤖 ខ្ញុំជា Bot ទាញយកវីដេអូពីវេទិកាល្បីៗ\n"
             "✅ TikTok · Facebook · YouTube · Instagram · Pinterest\n\n"
             "⚙️ <b>មុខងារដំណើរការ៖</b>\n"
-            "សូមចុចប៊ូតុង <b>ទាញយកវីដេអូ</b> ខាងក្រោម។\n\n"
+            "សូមជ្រើសរើសមុខងារណាមួយនៅខាងក្រោម។\n\n"
             "ℹ️ <b>ព័ត៌មានទូទៅ៖</b>\n"
             "ស្វែងយល់បន្ថែមពីការប្រើប្រាស់តាមរយៈប៊ូតុងខាងក្រោម។"
         )
@@ -386,9 +401,8 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         try:
             await callback.message.edit_text(
                 "🎬 <b>ទាញយកវីដេអូ</b>\n\n"
-                "សូមជ្រើសរើសប្រភេទដែលអ្នកចង់ទាញយក:",
-                parse_mode="HTML",
-                reply_markup=download_type_keyboard(),
+                "សូមផ្ញើ Link Video ដើម្បីធ្វើការទាញយក:",
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -410,6 +424,77 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         )
     except Exception:
         pass
+
+
+# ─────────────────────────────────────────────
+# Local Video -> MP3 Converter Handler
+# ─────────────────────────────────────────────
+
+@router.message(ConvertState.waiting_for_video, F.video | F.document)
+async def handle_local_video(message: Message, state: FSMContext):
+    """Handles uploaded video file to convert to MP3"""
+    video = message.video or message.document
+    
+    # Check mime type if it's a document
+    if message.document and not message.document.mime_type.startswith('video/'):
+        await message.answer("⚠️ សូមផ្ញើជាប្រភេទឯកសារ <b>វីដេអូ (Video)</b>។", parse_mode="HTML")
+        return
+
+    # Check file size (Telegram bot API max limit is 20MB for download)
+    if video.file_size > 20 * 1024 * 1024:
+        await message.answer("❌ <b>វីដេអូធំពេកហើយ!</b>\n\nទំហំអតិបរមាដែលអនុញ្ញាតគឺ <b>20MB</b>។ សូមផ្ញើវីដេអូខ្លីជាងនេះ។", parse_mode="HTML")
+        return
+
+    prog_msg = await message.answer("⏳ <b>កំពុងទាញយកវីដេអូរបស់អ្នក...</b>", parse_mode="HTML")
+
+    file_id = video.file_id
+    file = await message.bot.get_file(file_id)
+    file_ext = file.file_path.split('.')[-1]
+    input_path = f"temp_in_{file_id}.{file_ext}"
+    output_path = f"temp_out_{file_id}.mp3"
+
+    try:
+        # Download the file to server
+        await message.bot.download_file(file.file_path, input_path)
+        await safe_edit_text(prog_msg, "⏳ <b>កំពុងបំលែងទៅជា MP3...</b>\n<i>សូមរង់ចាំបន្តិច...</i>", parse_mode="HTML")
+
+        # Run FFmpeg to extract audio non-blockingly
+        process = await asyncio.create_subprocess_exec(
+            'ffmpeg', '-i', input_path, '-q:a', '0', '-map', 'a', output_path, '-y',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            logger.error(f"FFmpeg conversion error: {stderr.decode()}")
+            await safe_edit_text(prog_msg, "❌ <b>សុំទោស មានបញ្ហាក្នុងការបំលែងវីដេអូនេះ។</b>\nសូមព្យាយាមវីដេអូផ្សេង។", parse_mode="HTML")
+            return
+
+        await safe_edit_text(prog_msg, "📤 <b>កំពុងបញ្ជូនសំឡេងទៅកាន់អ្នក...</b>", parse_mode="HTML")
+
+        # Send Audio back
+        audio_file = FSInputFile(output_path)
+        await message.answer_audio(audio=audio_file, title="Converted Audio", performer="@v_videodownloader_bot")
+
+    except Exception as e:
+        logger.error(f"Error in video conversion: {e}", exc_info=True)
+        await safe_edit_text(prog_msg, "❌ <b>មានបញ្ហាប្រព័ន្ធ។</b> សូមសាកល្បងម្ដងទៀតនៅពេលក្រោយ។", parse_mode="HTML")
+    finally:
+        # Cleanup files and reset state
+        try:
+            await prog_msg.delete()
+        except:
+            pass
+        for p in [input_path, output_path]:
+            if os.path.exists(p):
+                os.remove(p)
+        await state.clear()
+
+@router.message(ConvertState.waiting_for_video)
+async def handle_convert_invalid_input(message: Message):
+    """Handles if user sends text or link instead of a video file"""
+    await message.answer("⚠️ សូមផ្ញើជា <b>ឯកសារវីដេអូ (Video File)</b> ដែលមានក្នុងទូរស័ព្ទរបស់អ្នក មិនមែនជាអត្ថបទ ឬ Link ទេ។", parse_mode="HTML")
 
 
 # ─────────────────────────────────────────────
@@ -564,10 +649,8 @@ async def handle_link(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("fmt_"))
 async def process_download_callback_from_query(callback: CallbackQuery, state: FSMContext):
     """Wrapper to handle actual callback queries (button clicks)"""
-    # Answer the callback query to remove loading state on button
     await callback.answer()
     
-    # Create context similar to SimpleNamespace for consistency
     download_context = SimpleNamespace(
         message=callback.message,
         data=callback.data,
@@ -603,7 +686,6 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
         await safe_edit_text(callback.message, "⚠️ សម័យផុតកំណត់។ សូមផ្ញើ link ម្តងទៀត。")
         return
 
-    # Determine download type from callback data
     if callback.data == "fmt_audio":
         download_type = "audio"
     elif callback.data == "fmt_photo":
@@ -611,21 +693,18 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
     else:
         download_type = "video"
 
-    # Label for progress message
     type_label = {
         "audio": "MP3",
         "photo": "PHOTO",
         "video": "VIDEO",
     }.get(download_type, "VIDEO")
 
-    # Safely edit the message, if it fails just keep using the message object
     progress_msg = await safe_edit_text(callback.message,
         f"⏳ <b>កំពុងទាញយក {type_label}...</b>\n"
         "<i>សូមរង់ចាំបន្តិច...</i>",
         parse_mode="HTML",
     )
 
-    # ── Execute download with timeout ────────────────────────────
     try:
         result = await asyncio.wait_for(
             downloader.download(url, type=download_type),
@@ -646,7 +725,6 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
         await state.clear()
         return
 
-    # ── Handle download errors ───────────────────────────────────
     if result["status"] == "error":
         raw_error = str(result.get("message", "Unknown error"))
         await safe_edit_text(progress_msg,
@@ -662,7 +740,6 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
         await state.clear()
         return
 
-    # ── TikTok Slideshow / Photo ─────────────────────────────────
     if (
         result.get("media_kind") == "slideshow"
         and isinstance(result.get("file_paths"), list)
@@ -684,13 +761,11 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
             await state.clear()
             return
 
-        # Telegram media groups: max 10 per batch
         for i in range(0, len(paths), 10):
             chunk = paths[i: i + 10]
             media = [InputMediaPhoto(media=FSInputFile(p)) for p in chunk]
             await callback.message.answer_media_group(media)
 
-        # Cleanup UI messages
         chat_id = callback.message.chat.id
         for mid in [url_message_id, format_message_id]:
             if mid:
@@ -700,7 +775,6 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
         except Exception:
             pass
 
-        # Cleanup image files + folder
         for p in paths:
             await safe_remove_file(p)
         try:
@@ -714,7 +788,6 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
         await state.clear()
         return
 
-    # ── Regular Video / Audio File ───────────────────────────────
     file_path = result["file_path"]
 
     if os.path.exists(file_path):
@@ -740,7 +813,6 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
         else:
             await callback.message.answer_video(file_input)
 
-        # Cleanup UI messages
         chat_id = callback.message.chat.id
         for mid in [url_message_id, format_message_id]:
             if mid:
@@ -825,7 +897,6 @@ async def cmd_broadcast(message: Message, command: CommandObject):
         await message.answer("⚠️ មិនមាន user សកម្មសម្រាប់ផ្សាយទេ។")
         return
 
-    # Validate HTML entities by sending a preview to the admin first.
     try:
         await message.bot.send_message(
             chat_id=ADMIN_ID,
@@ -886,7 +957,6 @@ async def cmd_broadcast(message: Message, command: CommandObject):
         if done < total:
             await asyncio.sleep(1)
 
-    # Mark blocked recipients inactive so future broadcasts skip them.
     if blocked:
         blocked_ids = [
             u.get("user_id")
@@ -957,7 +1027,6 @@ async def handle_bot_blocked(event: ChatMemberUpdated):
     full_name = escape(user.full_name or "")
     username = f"@{escape(user.username)}" if user.username else "(no username)"
 
-    # User blocked or kicked the bot
     if new_status in ("kicked", "left") and old_status == "member":
         logger.info(f"🚫 User blocked bot: {user_id}")
         await db.set_user_active(user_id, False)
@@ -970,7 +1039,6 @@ async def handle_bot_blocked(event: ChatMemberUpdated):
         )
         return
 
-    # User unblocked the bot
     if new_status == "member" and old_status in ("kicked", "left"):
         logger.info(f"✅ User unblocked bot: {user_id}")
         await db.set_user_active(user_id, True)
