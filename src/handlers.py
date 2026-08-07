@@ -6,6 +6,7 @@ from html import escape
 from datetime import datetime, timezone
 
 from src.tts_engine import generate_speech
+from src.pdf_converter import pdf_converter
 
 from aiogram import Router, F, Bot
 from aiogram.types import (
@@ -56,6 +57,11 @@ class ConvertState(StatesGroup):
 class TTSState(StatesGroup):
     waiting_for_voice = State()
     waiting_for_text = State()
+
+class PdfState(StatesGroup):
+    waiting_for_pdf = State()
+    waiting_for_format = State()
+    waiting_for_pages = State()
 
 
 # ─────────────────────────────────────────────
@@ -147,6 +153,7 @@ def feature_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🎬 ទាញយកវីដេអូ 📥", callback_data="feat_formats")],
             [InlineKeyboardButton(text="🔄 បំលែង Video ទៅ MP3", callback_data="feat_convert")],
             [InlineKeyboardButton(text="🗣️ អានអត្ថបទ (TTS)", callback_data="feat_tts")],
+            [InlineKeyboardButton(text="📄 បំលែង PDF ទៅរូបភាព", callback_data="feat_pdf")],
             [InlineKeyboardButton(text="ℹ️ ព័ត៌មានទូទៅ", callback_data="feat_general_info")],
         ]
     )
@@ -217,7 +224,7 @@ FEATURE_PANELS = {
         "❌ មិនគាំទ្រវីដេអូ Copyright\n"
         "❌ មិនគាំទ្រវីដេអូ Age-restricted\n"
         "⚠️ ទំហំអតិបរមា 49MB (សម្រាប់ទាញយក)\n"
-        "⚠️ ទំហំអតិបរមា 20MB (សម្រាប់បញ្ជូនវីដេអូបំលែង)\n\n"
+        "⚠️ ទំហំអតិបរមា 20MB (សម្រាប់បំលែង Video/PDF)\n\n"
         "<i>សូមផ្ញើ Link ដែលជា Public ប៉ុណ្ណោះ!</i>"
     ),
     "feat_faq": (
@@ -382,6 +389,19 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    if callback.data == "feat_pdf":
+        await state.set_state(PdfState.waiting_for_pdf)
+        await safe_edit_text(callback.message,
+            "📄 <b>បំលែង PDF ទៅជារូបភាព</b>\n\n"
+            "សូមផ្ញើ <b>ឯកសារ PDF</b> របស់អ្នកចូលមកក្នុង Chat នេះ (ទំហំអតិបរមា 20MB)។\n\n"
+            "<i>ចំណាំ៖ សូមផ្ញើជាឯកសារ PDF ផ្ទាល់ មិនមែនជា Link ទេ។</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")]]
+            )
+        )
+        return
+
     if callback.data == "feat_back":
         await state.clear()
         welcome = (
@@ -490,6 +510,289 @@ async def handle_local_video(message: Message, state: FSMContext):
 @router.message(ConvertState.waiting_for_video)
 async def handle_convert_invalid_input(message: Message):
     await message.answer("⚠️ សូមផ្ញើជា <b>ឯកសារវីដេអូ (Video File)</b> ដែលមានក្នុងទូរស័ព្ទរបស់អ្នក មិនមែនជាអត្ថបទ ឬ Link ទេ។", parse_mode="HTML")
+
+
+# ─────────────────────────────────────────────
+# PDF → Image Converter Handlers
+# ─────────────────────────────────────────────
+
+def pdf_format_keyboard(total_pages: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🖼️ JPG", callback_data="pdf_fmt_jpg"),
+                InlineKeyboardButton(text="🖼️ PNG", callback_data="pdf_fmt_png"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"📄 ទាំងអស់ ({total_pages} ទំព័រ)",
+                    callback_data="pdf_fmt_all",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back"),
+            ],
+        ]
+    )
+
+
+@router.message(PdfState.waiting_for_pdf, F.document)
+async def handle_pdf_document(message: Message, state: FSMContext):
+    document = message.document
+
+    mime = (document.mime_type or "").lower()
+    file_name = (document.file_name or "").lower()
+    if not (mime == "application/pdf" or file_name.endswith(".pdf")):
+        await message.answer(
+            "⚠️ សូមផ្ញើជាឯកសារ <b>PDF</b> ប៉ុណ្ណោះ។",
+            parse_mode="HTML",
+        )
+        return
+
+    if document.file_size > 20 * 1024 * 1024:
+        await message.answer(
+            "❌ <b>PDF ធំពេកហើយ!</b>\n\nទំហំអតិបរមាដែលអនុញ្ញាតគឺ <b>20MB</b>។",
+            parse_mode="HTML",
+        )
+        return
+
+    prog_msg = await message.answer(
+        "⏳ <b>កំពុងទាញយក PDF របស់អ្នក...</b>",
+        parse_mode="HTML",
+    )
+
+    file_id = document.file_id
+    file = await message.bot.get_file(file_id)
+    input_path = f"temp_pdf_{file_id}.pdf"
+
+    try:
+        await message.bot.download_file(file.file_path, input_path)
+
+        import fitz
+        doc = fitz.open(input_path)
+        total_pages = doc.page_count
+        doc.close()
+
+        if total_pages == 0:
+            await safe_edit_text(
+                prog_msg,
+                "❌ <b>PDF នេះទទេ ឬមិនអាចអានបាន។</b>",
+                parse_mode="HTML",
+            )
+            await state.clear()
+            return
+
+        await state.update_data(pdf_path=input_path, pdf_total_pages=total_pages)
+        await state.set_state(PdfState.waiting_for_format)
+
+        await safe_edit_text(
+            prog_msg,
+            f"📄 <b>បានទាញយក PDF រួច!</b>\n\n"
+            f"📚 ចំនួនទំព័រ: <b>{total_pages}</b>\n\n"
+            "សូមជ្រើសរើសទម្រង់រូបភាព ឬបំប្លែងទាំងអស់៖",
+            parse_mode="HTML",
+            reply_markup=pdf_format_keyboard(total_pages),
+        )
+    except Exception as e:
+        logger.error(f"PDF download error: {e}", exc_info=True)
+        await safe_edit_text(
+            prog_msg,
+            "❌ <b>មានបញ្ហាក្នុងការទាញយក PDF ។</b> សូមព្យាយាមម្ដងទៀត។",
+            parse_mode="HTML",
+        )
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        await state.clear()
+
+
+@router.message(PdfState.waiting_for_pdf)
+async def handle_pdf_invalid_input(message: Message):
+    await message.answer(
+        "⚠️ សូមផ្ញើជា <b>ឯកសារ PDF</b> មិនមែនជាអត្ថបទ ឬរូបភាពទេ។",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("pdf_fmt_"), PdfState.waiting_for_format)
+async def handle_pdf_format_selection(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    total_pages = data.get("pdf_total_pages", 0)
+
+    if callback.data == "pdf_fmt_all":
+        image_format = data.get("pdf_image_format", "jpg")
+        pages = list(range(1, total_pages + 1))
+        await state.update_data(pdf_pages=pages)
+        await _run_pdf_conversion(callback, state, image_format, pages)
+        return
+
+    image_format = "jpg" if callback.data == "pdf_fmt_jpg" else "png"
+    await state.update_data(pdf_image_format=image_format)
+    await state.set_state(PdfState.waiting_for_pages)
+
+    await safe_edit_text(
+        callback.message,
+        f"✅ បានជ្រើសរើស: <b>{image_format.upper()}</b>\n\n"
+        f"📚 PDF នេះមាន <b>{total_pages}</b> ទំព័រ។\n\n"
+        "វាយលេខទំព័រដែលអ្នកចង់បំលែង៖\n"
+        "• ទំព័រតែមួយ៖ <code>3</code>\n"
+        "• ច្រើនទំព័រ៖ <code>1,3,5</code>\n"
+        "• ជួរទំព័រ៖ <code>1-5</code>\n"
+        "• លាយល្បូម៖ <code>1,3-5,8</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"📄 ទាំងអស់ ({total_pages} ទំព័រ)",
+                        callback_data="pdf_all_from_pages",
+                    )
+                ],
+                [InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "pdf_all_from_pages", PdfState.waiting_for_pages)
+async def handle_pdf_all_from_pages(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    total_pages = data.get("pdf_total_pages", 0)
+    image_format = data.get("pdf_image_format", "jpg")
+    pages = list(range(1, total_pages + 1))
+    await _run_pdf_conversion(callback, state, image_format, pages)
+
+
+@router.message(PdfState.waiting_for_pages, F.text)
+async def handle_pdf_page_selection(message: Message, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data.get("pdf_total_pages", 0)
+    image_format = data.get("pdf_image_format", "jpg")
+
+    pages, err = pdf_converter.parse_page_selection(message.text, total_pages)
+    if err:
+        await message.answer(f"⚠️ {err}", parse_mode="HTML")
+        return
+
+    prog_msg = await message.answer(
+        f"⏳ <b>កំពុងបំលែង {len(pages)} ទំព័រទៅ {image_format.upper()}...</b>\n"
+        "<i>សូមរង់ចាំបន្តិច...</i>",
+        parse_mode="HTML",
+    )
+    await _run_pdf_conversion_with_msg(message, prog_msg, state, image_format, pages)
+
+
+@router.message(PdfState.waiting_for_pages)
+async def handle_pdf_pages_invalid(message: Message):
+    await message.answer(
+        "⚠️ សូមវាយបញ្ចូល <b>លេខទំព័រ</b> (ឧ. 1, 3-5)។",
+        parse_mode="HTML",
+    )
+
+
+async def _run_pdf_conversion(callback: CallbackQuery, state: FSMContext, image_format: str, pages: list):
+    prog_msg = await safe_edit_text(
+        callback.message,
+        f"⏳ <b>កំពុងបំលែង {len(pages)} ទំព័រទៅ {image_format.upper()}...</b>\n"
+        "<i>សូមរង់ចាំបន្តិច...</i>",
+        parse_mode="HTML",
+    )
+    await _run_pdf_conversion_with_msg(callback, prog_msg, state, image_format, pages)
+
+
+async def _run_pdf_conversion_with_msg(ctx, prog_msg, state: FSMContext, image_format: str, pages: list):
+    bot = ctx.bot
+    data = await state.get_data()
+    pdf_path = data.get("pdf_path")
+    chat_id = ctx.message.chat.id if hasattr(ctx, "message") else ctx.chat.id
+
+    if not pdf_path or not os.path.exists(pdf_path):
+        await safe_edit_text(prog_msg, "❌ សម័យផុតកំណត់។ សូមផ្ញើ PDF ម្តងទៀត។", parse_mode="HTML")
+        await state.clear()
+        return
+
+    try:
+        result = await asyncio.wait_for(
+            pdf_converter.convert(pdf_path, image_format, pages),
+            timeout=DOWNLOAD_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        await safe_edit_text(
+            prog_msg,
+            "❌ <b>ការបំលែងយូរពេកហើយ។</b>\n\nសូមសាកល្បងជាមួយចំនួនទំព័រតិចជាងនេះ។",
+            parse_mode="HTML",
+        )
+        await state.clear()
+        return
+
+    if result["status"] == "error":
+        await safe_edit_text(
+            prog_msg,
+            f"❌ <b>មិនអាចបំលែងបានទេ</b>\n\n{escape(result.get('message', ''))}",
+            parse_mode="HTML",
+        )
+        await state.clear()
+        return
+
+    image_paths = [
+        p for p in result.get("file_paths", [])
+        if isinstance(p, str) and os.path.exists(p)
+    ]
+    if not image_paths:
+        await safe_edit_text(
+            prog_msg,
+            "❌ <b>មិនអាចបំលែងទំព័រណាមួយបានទេ។</b>",
+            parse_mode="HTML",
+        )
+        await state.clear()
+        return
+
+    await safe_edit_text(prog_msg, "📤 <b>កំពុងបញ្ជូនរូបភាព...</b>", parse_mode="HTML")
+
+    try:
+        for i in range(0, len(image_paths), 10):
+            chunk = image_paths[i:i + 10]
+            media = [InputMediaPhoto(media=FSInputFile(p)) for p in chunk]
+            await bot.send_media_group(chat_id=chat_id, media=media)
+
+        await send_log(
+            f"📄 PDF → {image_format.upper()}\n"
+            f"User: <code>{ctx.from_user.id}</code>\n"
+            f"Pages: {len(image_paths)}",
+            bot=bot,
+        )
+    except TelegramBadRequest as e:
+        logger.error(f"PDF upload error: {e}", exc_info=True)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ <b>មិនអាចបញ្ជូនរូបភាពបានទេ។</b>\n\n<code>{escape(str(e)[:200])}</code>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"PDF send error: {e}", exc_info=True)
+        await bot.send_message(
+            chat_id=chat_id,
+            text="❌ <b>មានបញ្ហាក្នុងការបញ្ជូនរូបភាព។</b> សូមព្យាយាមម្ដងទៀត។",
+            parse_mode="HTML",
+        )
+    finally:
+        try:
+            await prog_msg.delete()
+        except Exception:
+            pass
+        for p in image_paths:
+            await safe_remove_file(p)
+        try:
+            if image_paths:
+                folder = os.path.dirname(image_paths[0])
+                if folder and os.path.isdir(folder) and not os.listdir(folder):
+                    os.rmdir(folder)
+        except Exception:
+            pass
+        if pdf_path and os.path.exists(pdf_path):
+            os.remove(pdf_path)
+        await state.clear()
 
 
 # ─────────────────────────────────────────────
