@@ -299,11 +299,17 @@ class CobaltDownloader:
         Returns:
             Dict with keys: status, file_path, title, duration, uploader
         """
-        # Try Cobalt v7 first
+        # Photo posts must remain a carousel; never treat them as video files.
         result = await self._try_cobalt_api(url, download_type)
         if result["status"] == "success":
             logger.info("✅ Downloaded via Cobalt API v7")
             return result
+
+        if download_type == "photo":
+            return {
+                "status": "error",
+                "message": "TikTok photo carousel was not returned by Cobalt.",
+            }
 
         # Audio-only: yt-dlp handles this better (called from downloader.py)
         if download_type == "audio":

@@ -638,10 +638,23 @@ class Downloader:
 
         if platform == "tiktok":
             if type == "photo":
-                result = await self._try_tikwm_photo(url)
-                if result.get("status") == "success":
-                    return result
-                if result.get("message") == "not_photo_post":
+                from src.cobalt_api import cobalt_downloader
+
+                cobalt_result = await cobalt_downloader.download(url, "photo")
+                if cobalt_result.get("status") == "success":
+                    if cobalt_result.get("media_kind") == "slideshow":
+                        return cobalt_result
+                    file_path = cobalt_result.get("file_path")
+                    if isinstance(file_path, str):
+                        try:
+                            os.remove(file_path)
+                        except OSError:
+                            pass
+
+                tikwm_result = await self._try_tikwm_photo(url)
+                if tikwm_result.get("status") == "success":
+                    return tikwm_result
+                if tikwm_result.get("message") == "not_photo_post":
                     return {
                         "status": "error",
                         "user_message": (
@@ -650,7 +663,14 @@ class Downloader:
                         ),
                         "message": "not a photo post",
                     }
-                return await self.download_with_ytdlp(url, type)
+
+                return {
+                    "status": "error",
+                    "message": (
+                        "TikTok photo download failed. "
+                        "The photo service did not return any images."
+                    ),
+                }
 
             if type == "audio":
                 return await self.download_with_ytdlp(url, type)
