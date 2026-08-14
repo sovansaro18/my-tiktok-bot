@@ -1089,9 +1089,11 @@ async def process_download_callback(callback: SimpleNamespace, state: FSMContext
 
     if result["status"] == "error":
         raw_error = str(result.get("message", "Unknown error"))
-        await safe_edit_text(progress_msg,
-            friendly_download_error(url, raw_error), parse_mode="HTML"
-        )
+        if result.get("user_message"):
+            error_text = result["user_message"]
+        else:
+            error_text = friendly_download_error(url, raw_error)
+        await safe_edit_text(progress_msg, error_text, parse_mode="HTML")
         await send_log(
             f"❌ Download Error\n"
             f"User: {escape(callback.from_user.full_name)} "

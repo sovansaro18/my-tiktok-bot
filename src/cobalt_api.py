@@ -166,20 +166,44 @@ class CobaltDownloader:
                         # Handle picker (carousel/slideshow)
                         elif status == "picker":
                             picker_items = data.get("picker", [])
-                            if picker_items and "url" in picker_items[0]:
-                                download_url = picker_items[0]["url"]
-                                filename = os.path.join(
-                                    DOWNLOAD_DIR,
-                                    f"tiktok_{abs(hash(url))}.mp4",
+                            if not picker_items:
+                                logger.warning("Cobalt: empty picker")
+                                continue
+
+                            import os as _os
+                            import uuid as _uuid
+                            folder = _os.path.join(
+                                DOWNLOAD_DIR,
+                                f"tiktok_picker_{_uuid.uuid4().hex}",
+                            )
+                            _os.makedirs(folder, exist_ok=True)
+
+                            downloaded_files = []
+                            for idx, item in enumerate(picker_items):
+                                pick_url = item.get("url")
+                                if not pick_url:
+                                    continue
+                                ext = "jpg"
+                                ct = (item.get("mime_type") or "").lower()
+                                if "png" in ct:
+                                    ext = "png"
+                                elif "webp" in ct:
+                                    ext = "webp"
+                                img_path = _os.path.join(
+                                    folder, f"photo_{idx+1:02d}.{ext}"
                                 )
-                                if await self._download_file(download_url, filename):
-                                    return {
-                                        "status": "success",
-                                        "file_path": filename,
-                                        "title": "TikTok Carousel",
-                                        "duration": 0,
-                                        "uploader": "TikTok",
-                                    }
+                                if await self._download_file(pick_url, img_path):
+                                    downloaded_files.append(img_path)
+
+                            if downloaded_files:
+                                return {
+                                    "status": "success",
+                                    "media_kind": "slideshow",
+                                    "file_paths": downloaded_files,
+                                    "title": "TikTok Photo",
+                                    "duration": 0,
+                                    "uploader": "TikTok",
+                                }
 
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout connecting to: {endpoint}")
@@ -209,7 +233,8 @@ class CobaltDownloader:
                 "Accept": "application/json",
             }
 
-            api_url = f"https://www.tikwm.com/api/?url={url}&hd=1"
+            from urllib.parse import quote as _quote
+            api_url = f"https://www.tikwm.com/api/?url={_quote(url, safe='')}&hd=1"
 
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 async with session.get(api_url, headers=headers) as response:

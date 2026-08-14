@@ -5,7 +5,7 @@ import re
 import uuid
 import time
 import shutil
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import aiohttp
 import yt_dlp
@@ -403,7 +403,7 @@ class Downloader:
                 "User-Agent": self.USER_AGENT,
                 "Accept": "application/json",
             }
-            api_url = f"https://www.tikwm.com/api/?url={url}&hd=1"
+            api_url = f"https://www.tikwm.com/api/?url={quote(url, safe='')}&hd=1"
             timeout = aiohttp.ClientTimeout(total=20)
 
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -443,6 +443,11 @@ class Downloader:
                     ) as dl_session:
                         for idx, img_url in enumerate(images):
                             try:
+                                if img_url.startswith("//"):
+                                    img_url = "https:" + img_url
+                                elif not img_url.startswith("http"):
+                                    img_url = "https://www.tikwm.com" + img_url
+
                                 async with dl_session.get(
                                     img_url, allow_redirects=True
                                 ) as img_resp:
@@ -639,10 +644,11 @@ class Downloader:
                 if result.get("message") == "not_photo_post":
                     return {
                         "status": "error",
-                        "message": (
+                        "user_message": (
                             "Link នេះជាវីដេអូ មិនមែនរូបភាពទេ។\n\n"
                             "សូមប្រើប៊ូតុង 🎬 <b>Video</b> ជំនួស។"
                         ),
+                        "message": "not a photo post",
                     }
                 return await self.download_with_ytdlp(url, type)
 
