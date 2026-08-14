@@ -147,19 +147,17 @@ def friendly_download_error(url: str, err: str) -> str:
 # ─────────────────────────────────────────────
 
 def feature_menu_keyboard() -> InlineKeyboardMarkup:
-    """Main Menu Keyboard (Only Core Functions + General Info Button)"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🎬 ទាញយកវីដេអូ 📥", callback_data="feat_formats")],
-            [InlineKeyboardButton(text="🔄 បំលែង Video ទៅ MP3", callback_data="feat_convert")],
-            [InlineKeyboardButton(text="🗣️ អានអត្ថបទ (TTS)", callback_data="feat_tts")],
-            [InlineKeyboardButton(text="📄 បំលែង PDF ទៅរូបភាព", callback_data="feat_pdf")],
-            [InlineKeyboardButton(text="ℹ️ ព័ត៌មានទូទៅ", callback_data="feat_general_info")],
+            [InlineKeyboardButton(text="📥 ទាញយកវីដេអូ", callback_data="feat_formats")],
+            [InlineKeyboardButton(text="🎵 បំលែង Video ទៅ MP3", callback_data="feat_convert")],
+            [InlineKeyboardButton(text="🗣 អានអត្ថបទ", callback_data="feat_tts")],
+            [InlineKeyboardButton(text="🖼 បំលែង PDF ទៅរូបភាព", callback_data="feat_pdf")],
+            [InlineKeyboardButton(text="ℹ ព័ត៌មានទូទៅ", callback_data="feat_general_info")],
         ]
     )
 
 def general_info_keyboard() -> InlineKeyboardMarkup:
-    """Sub-Menu Keyboard (General Information Links)"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -167,15 +165,15 @@ def general_info_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🌐 វេទិកាគាំទ្រ", callback_data="feat_platforms"),
             ],
             [
-                InlineKeyboardButton(text="📊 គណនីរបស់ខ្ញុំ", callback_data="feat_plan"),
-                InlineKeyboardButton(text="🚫 កំណត់ប្រើប្រាស់", callback_data="feat_limits"),
+                InlineKeyboardButton(text="👤 គណនីរបស់ខ្ញុំ", callback_data="feat_plan"),
+                InlineKeyboardButton(text="⚠ កំណត់ប្រើប្រាស់", callback_data="feat_limits"),
             ],
             [
                 InlineKeyboardButton(text="❓ សំណួរញឹកញាប់", callback_data="feat_faq"),
-                InlineKeyboardButton(text="📩 ជូនដំណឹង Admin", callback_data="feat_report"),
+                InlineKeyboardButton(text="📩 ជូនដំណឹង", callback_data="feat_report"),
             ],
             [
-                InlineKeyboardButton(text="⬅️ ត្រឡប់ក្រោយ", callback_data="feat_back"),
+                InlineKeyboardButton(text="⬅ ត្រឡប់", callback_data="feat_back"),
             ],
         ]
     )
@@ -184,11 +182,11 @@ def tts_voice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="👨 សំឡេងប្រុស", callback_data="tts_voice_male"),
+                InlineKeyboardButton(text="🧑 សំឡេងប្រុស", callback_data="tts_voice_male"),
                 InlineKeyboardButton(text="👩 សំឡេងស្រី", callback_data="tts_voice_female"),
             ],
             [
-                InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back"),
+                InlineKeyboardButton(text="⬅ បោះបង់", callback_data="feat_back"),
             ]
         ]
     )
@@ -261,11 +259,11 @@ def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"),
-                    InlineKeyboardButton(text="🎵 MP3", callback_data="fmt_audio"),
+                    InlineKeyboardButton(text="🎬 វីដេអូ", callback_data="fmt_video"),
+                    InlineKeyboardButton(text="🎵 អូឌីយ៉ូ", callback_data="fmt_audio"),
                 ],
                 [
-                    InlineKeyboardButton(text="🖼️ រូបភាព (Photo)", callback_data="fmt_photo"),
+                    InlineKeyboardButton(text="🖼 រូបភាព", callback_data="fmt_photo"),
                 ],
             ]
         )
@@ -273,8 +271,8 @@ def format_select_keyboard(platform: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="🎬 វីដេអូ (MP4)", callback_data="fmt_video"),
-                    InlineKeyboardButton(text="🎵 អូឌីយ៉ូ (MP3)", callback_data="fmt_audio"),
+                    InlineKeyboardButton(text="🎬 វីដេអូ", callback_data="fmt_video"),
+                    InlineKeyboardButton(text="🎵 អូឌីយ៉ូ", callback_data="fmt_audio"),
                 ]
             ]
         )
@@ -361,7 +359,7 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             "សរសេរសាររបស់អ្នកនៅទីនេះ ហើយផ្ញើមកខ្ញុំ។",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_general_info")]]
+                inline_keyboard=[[InlineKeyboardButton(text="⬅ ត្រឡប់", callback_data="feat_general_info")]]
             )
         )
         return
@@ -374,7 +372,7 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             "<i>ចំណាំ៖ សូមផ្ញើជាវីដេអូផ្ទាល់ មិនមែនជា Link ទេ។</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")]]
+                inline_keyboard=[[InlineKeyboardButton(text="⬅ បោះបង់", callback_data="feat_back")]]
             )
         )
         return
@@ -397,7 +395,7 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             "<i>ចំណាំ៖ សូមផ្ញើជាឯកសារ PDF ផ្ទាល់ មិនមែនជា Link ទេ។</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")]]
+                inline_keyboard=[[InlineKeyboardButton(text="⬅ បោះបង់", callback_data="feat_back")]]
             )
         )
         return
@@ -424,7 +422,7 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
                 "សូមផ្ញើ Link Video ដើម្បីធ្វើការទាញយក:",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back")]]
+                    inline_keyboard=[[InlineKeyboardButton(text="⬅ បោះបង់", callback_data="feat_back")]]
                 )
             )
         except Exception:
@@ -441,7 +439,7 @@ async def feature_menu_callback(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="⬅️ ត្រឡប់", callback_data="feat_general_info")]
+                    [InlineKeyboardButton(text="⬅ ត្រឡប់", callback_data="feat_general_info")]
                 ]
             ),
         )
@@ -520,17 +518,17 @@ def pdf_format_keyboard(total_pages: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🖼️ JPG", callback_data="pdf_fmt_jpg"),
-                InlineKeyboardButton(text="🖼️ PNG", callback_data="pdf_fmt_png"),
+                InlineKeyboardButton(text="🖼 JPG", callback_data="pdf_fmt_jpg"),
+                InlineKeyboardButton(text="🖼 PNG", callback_data="pdf_fmt_png"),
             ],
             [
                 InlineKeyboardButton(
-                    text=f"📄 ទាំងអស់ ({total_pages} ទំព័រ)",
+                    text=f"📄 ទំព័រទាំងអស់ ({total_pages})",
                     callback_data="pdf_fmt_all",
                 ),
             ],
             [
-                InlineKeyboardButton(text="⬅️ បោះបង់", callback_data="feat_back"),
+                InlineKeyboardButton(text="⬅ បោះបង់", callback_data="feat_back"),
             ],
         ]
     )
@@ -644,7 +642,7 @@ async def handle_pdf_format_selection(callback: CallbackQuery, state: FSMContext
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"📄 ទាំងអស់ ({total_pages} ទំព័រ)",
+                        text=f"📄 ទំព័រទាំងអស់ ({total_pages})",
                         callback_data="pdf_all_from_pages",
                     )
                 ],
